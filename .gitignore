@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.jarvis/
+.env
+*.egg-info/
+build/
+dist/
+*.spec.bak
+release_artifacts/
+JARVIS_backup/
+JARVIS_new/
+.pytest_cache/
+*.pyi.bak

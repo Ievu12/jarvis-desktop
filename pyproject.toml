@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis"
+version = "1.0.0"
+description = "JARVIS automation agent, sandboxed to its project directory."
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "keyring>=24.0.0",
+    "SpeechRecognition>=3.10.0",
+    "pyttsx3>=2.90",
+    "PyAudio>=0.2.13",
+    "customtkinter>=5.2.0",
+    "packaging>=23.0",
+]
+
+[project.scripts]
+jarvis = "jarvis.cli.main:main"
+jarvis-instagram-daily-report = "jarvis.cli.daily_instagram_report:main"
+jarvis-gui = "jarvis.gui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["jarvis*"]
+
+[tool.pyright]
+include = ["jarvis"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
