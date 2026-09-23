@@ -13,3 +13,6 @@ JARVIS_backup/
 JARVIS_new/
 .pytest_cache/
 *.pyi.bak
+*.pfx
+*.p12
+_test_install/

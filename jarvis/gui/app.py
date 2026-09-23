@@ -23,6 +23,7 @@ here and is completely unaffected by this window running.
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -30,6 +31,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from jarvis.__version__ import __version__
 from jarvis.config import ANTHROPIC_API_KEY, JARVIS_ROOT
 from jarvis.core.agent import Agent
 from jarvis.core.approval import set_outside_sandbox_handler, set_side_effect_handler
@@ -37,13 +39,21 @@ from jarvis.core.llm import LLMClient
 from jarvis.core.project_notes import load_project_notes
 from jarvis.core.secrets import mask_secret
 from jarvis.gui.confirmation_dialog import AskUserConfirmation
+from jarvis.gui.settings_store import UpdateSettings, load_update_settings, save_update_settings
+from jarvis.gui.updater import UpdateCheckResult
 from jarvis.gui.worker import (
     AgentStepResult,
     ListenTaskResult,
     SpeakTaskResult,
+    UpdateCheckTaskResult,
+    UpdateDownloadTaskResult,
+    UpdateInstallTaskResult,
     run_agent_step_in_background,
     run_listen_in_background,
     run_speak_in_background,
+    run_update_check_in_background,
+    run_update_download_in_background,
+    run_update_install_in_background,
 )
 from jarvis.session.store import load_history, save_history
 
@@ -85,10 +95,16 @@ class JarvisApp:
         self.voice_enabled = True
         self._history: list[dict[str, Any]] = []
         self._awaiting_reply = False
+        self.update_settings: UpdateSettings = load_update_settings()
+        self._latest_update_check: UpdateCheckResult | None = None
+        self._settings_window: ctk.CTkToplevel | None = None
 
         self._build_widgets()
         self._init_backend()
         self._poll_queue()
+
+        if self.update_settings.check_for_updates:
+            self._check_for_updates(silent=True)
 
     # --- widget construction ---------------------------------------------------
 
@@ -101,6 +117,11 @@ class JarvisApp:
 
         self.status_label = ctk.CTkLabel(header, text=_STATUS_READY, font=ctk.CTkFont(size=14))
         self.status_label.pack(side="right")
+
+        self.settings_button = ctk.CTkButton(
+            header, text="⚙️ Settings", width=90, command=self._open_settings_window,
+        )
+        self.settings_button.pack(side="right", padx=(0, 12))
 
         self.transcript = ctk.CTkTextbox(self.root, font=ctk.CTkFont(size=13), wrap="word")
         self.transcript.pack(fill="both", expand=True, padx=20, pady=10)
@@ -257,6 +278,174 @@ class JarvisApp:
             if result.speak_result.notice:
                 self._append_transcript("jarvis", f"[voice] {result.speak_result.notice}")
             self._set_status(_STATUS_READY)
+        elif isinstance(result, UpdateCheckTaskResult):
+            self._on_update_check_done(result)
+        elif isinstance(result, UpdateDownloadTaskResult):
+            self._on_update_download_done(result)
+        elif isinstance(result, UpdateInstallTaskResult):
+            self._on_update_install_done(result)
+
+    def _on_update_check_done(self, result: UpdateCheckTaskResult) -> None:
+        check_result = result.check_result
+        self._latest_update_check = check_result
+        if not result.silent and hasattr(self, "check_updates_button") and self.check_updates_button.winfo_exists():
+            self.check_updates_button.configure(state="normal")
+        self._refresh_settings_status()
+
+        if check_result.error and not result.silent:
+            self._append_transcript("jarvis", f"[update] {check_result.error}")
+            return
+        if not check_result.update_available:
+            if not result.silent:
+                self._append_transcript("jarvis", "[update] JARVIS jau naujausios versijos.")
+            return
+
+        self._append_transcript(
+            "jarvis",
+            f"[update] Nauja JARVIS versija prieinama: v{check_result.current_version} → "
+            f"v{check_result.latest_version}",
+        )
+        if self.update_settings.download_updates:
+            self._download_update(check_result, auto_install=self.update_settings.install_updates)
+
+    def _on_update_download_done(self, result: UpdateDownloadTaskResult) -> None:
+        if result.error:
+            self._append_transcript("jarvis", f"[update] Atsisiuntimas nepavyko: {result.error}")
+            return
+        self._append_transcript(
+            "jarvis", f"[update] Nauja versija atsisiųsta ir patikrinta (checksum OK)."
+        )
+        if result.auto_install:
+            self._install_update(result.zip_path)
+        else:
+            self._append_transcript(
+                "jarvis",
+                "[update] Paspausk \"Update now\" Settings lange, kad įdiegtum atsisiųstą versiją.",
+            )
+
+    def _on_update_install_done(self, result: UpdateInstallTaskResult) -> None:
+        if hasattr(self, "update_now_button") and self.update_now_button.winfo_exists():
+            self.update_now_button.configure(state="normal")
+        if result.success:
+            self._append_transcript(
+                "jarvis", "[update] Nauja versija sėkmingai įdiegta. Paleisk JARVIS iš naujo."
+            )
+        else:
+            self._append_transcript("jarvis", f"[update] Diegimas nepavyko: {result.error}")
+
+    # --- settings window --------------------------------------------------------------
+
+    def _open_settings_window(self) -> None:
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.focus()
+            return
+
+        window = ctk.CTkToplevel(self.root)
+        self._settings_window = window
+        window.title("JARVIS Settings")
+        window.geometry("440x360")
+        window.resizable(False, False)
+        window.attributes("-topmost", True)
+
+        ctk.CTkLabel(
+            window, text="Updates", font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=20, pady=(20, 8))
+
+        check_var = tk.BooleanVar(value=self.update_settings.check_for_updates)
+        download_var = tk.BooleanVar(value=self.update_settings.download_updates)
+        install_var = tk.BooleanVar(value=self.update_settings.install_updates)
+
+        def _persist() -> None:
+            self.update_settings = UpdateSettings(
+                check_for_updates=check_var.get(),
+                download_updates=download_var.get(),
+                install_updates=install_var.get(),
+            )
+            save_update_settings(self.update_settings)
+
+        ctk.CTkCheckBox(
+            window, text="Automatically check for updates", variable=check_var, command=_persist,
+        ).pack(anchor="w", padx=24, pady=4)
+        ctk.CTkCheckBox(
+            window, text="Automatically download updates", variable=download_var, command=_persist,
+        ).pack(anchor="w", padx=24, pady=4)
+        ctk.CTkCheckBox(
+            window, text="Automatically install updates", variable=install_var, command=_persist,
+        ).pack(anchor="w", padx=24, pady=4)
+
+        ctk.CTkLabel(
+            window, text=f"Current version: JARVIS v{__version__}", font=ctk.CTkFont(size=12),
+        ).pack(anchor="w", padx=20, pady=(16, 4))
+
+        self.settings_status_label = ctk.CTkLabel(window, text="", font=ctk.CTkFont(size=12), text_color="gray")
+        self.settings_status_label.pack(anchor="w", padx=20, pady=(0, 8))
+
+        button_row = ctk.CTkFrame(window, fg_color="transparent")
+        button_row.pack(anchor="w", padx=16, pady=8)
+
+        self.check_updates_button = ctk.CTkButton(
+            button_row, text="Check for updates", command=lambda: self._check_for_updates(silent=False),
+        )
+        self.check_updates_button.pack(side="left", padx=4)
+
+        self.update_now_button = ctk.CTkButton(
+            button_row, text="Update now", command=self._on_update_now_clicked, state="disabled",
+        )
+        self.update_now_button.pack(side="left", padx=4)
+
+        self._refresh_settings_status()
+
+    def _refresh_settings_status(self) -> None:
+        if not hasattr(self, "settings_status_label") or not self.settings_status_label.winfo_exists():
+            return
+        result = self._latest_update_check
+        if result is None:
+            self.settings_status_label.configure(text="")
+        elif result.error:
+            self.settings_status_label.configure(text=result.error)
+        elif result.update_available:
+            self.settings_status_label.configure(
+                text=f"Update available: v{result.current_version} → v{result.latest_version}"
+            )
+            if hasattr(self, "update_now_button") and self.update_now_button.winfo_exists():
+                self.update_now_button.configure(state="normal")
+        else:
+            self.settings_status_label.configure(text="JARVIS is up to date.")
+
+    # --- update checking/downloading/installing -----------------------------------------
+    #
+    # All three steps (check/download/install) run on background threads
+    # via jarvis.gui.worker and report back through self.result_queue,
+    # handled in _handle_result() below alongside AgentStepResult/
+    # ListenTaskResult/SpeakTaskResult - the same polling pattern, not a
+    # separate mechanism. install_update() only ever runs when
+    # update_settings.install_updates is explicitly True OR the person
+    # clicked "Update now" themselves (_on_update_now_clicked) - never
+    # silently as a side effect of the startup auto-check alone.
+
+    def _check_for_updates(self, *, silent: bool) -> None:
+        if not silent and hasattr(self, "check_updates_button"):
+            self.check_updates_button.configure(state="disabled")
+        run_update_check_in_background(self.result_queue, silent=silent)
+
+    def _download_update(self, result: UpdateCheckResult, *, auto_install: bool) -> None:
+        staging_dir = JARVIS_ROOT.parent / "JARVIS_new"
+        run_update_download_in_background(
+            result, staging_dir, self.result_queue, auto_install=auto_install
+        )
+
+    def _on_update_now_clicked(self) -> None:
+        if self._latest_update_check and self._latest_update_check.update_available:
+            if hasattr(self, "update_now_button"):
+                self.update_now_button.configure(state="disabled")
+            # Explicit person-initiated click always installs once
+            # downloaded, regardless of the "Automatically install"
+            # setting - that setting only governs the SILENT/automatic
+            # path (_handle_result's UpdateDownloadTaskResult branch).
+            self._download_update(self._latest_update_check, auto_install=True)
+
+    def _install_update(self, zip_path) -> None:
+        run_update_install_in_background(zip_path, JARVIS_ROOT, self.result_queue)
 
     # --- shutdown -------------------------------------------------------------------
 
@@ -271,6 +460,34 @@ class JarvisApp:
 
 
 def main() -> None:
+    # '--verify-startup' is used only by jarvis.gui.updater
+    # .verify_executable_starts() right after installing a new version:
+    # constructs the window (proving imports/init work - the same code
+    # path a normal launch takes) and exits 0 immediately instead of
+    # entering mainloop(), so the updater's post-install check finishes
+    # in well under a second rather than waiting for a person to close
+    # a window it never needed to show. Any exception during __init__
+    # here propagates as a non-zero exit, exactly what the updater
+    # checks for to decide whether to roll back.
+    if len(sys.argv) > 1 and sys.argv[1] == "--verify-startup":
+        app = JarvisApp()
+        app.root.withdraw()
+        app.root.destroy()
+        sys.exit(0)
+
+    # Diagnostic-only: prints where this build resolves JARVIS_ROOT to
+    # and exits, without ever constructing a window - used to confirm
+    # (for a PyInstaller-packaged JARVIS.exe specifically) that the
+    # sandbox/user-data root resolves to the executable's own directory,
+    # not some internal PyInstaller temp/_internal path. Not part of
+    # the documented CLI surface; exists for build verification only.
+    if len(sys.argv) > 1 and sys.argv[1] == "--print-jarvis-root":
+        from jarvis.config import JARVIS_DATA_DIR
+
+        print(f"JARVIS_ROOT={JARVIS_ROOT}")
+        print(f"JARVIS_DATA_DIR={JARVIS_DATA_DIR}")
+        sys.exit(0)
+
     app = JarvisApp()
     app.run()
 

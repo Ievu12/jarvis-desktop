@@ -51,6 +51,35 @@ class SpeakTaskResult:
     speak_result: SpeakResult
 
 
+@dataclass
+class UpdateCheckTaskResult:
+    """Outcome of a background jarvis.gui.updater.check_for_update()
+    call, posted for jarvis.gui.app to update its Settings window and
+    optionally trigger a download."""
+
+    check_result: Any  # jarvis.gui.updater.UpdateCheckResult
+    silent: bool
+
+
+@dataclass
+class UpdateDownloadTaskResult:
+    """Outcome of a background jarvis.gui.updater.download_update()
+    call. Exactly one of `zip_path`/`error` is set."""
+
+    zip_path: Any  # pathlib.Path | None
+    error: str | None
+    auto_install: bool
+
+
+@dataclass
+class UpdateInstallTaskResult:
+    """Outcome of a background jarvis.gui.updater.install_update() (plus
+    verify_executable_starts()/rollback_update() as needed) call."""
+
+    success: bool
+    error: str | None
+
+
 ResultQueue: TypeAlias = "queue.Queue[Any]"
 
 
@@ -98,6 +127,76 @@ def run_speak_in_background(text: str, result_queue: ResultQueue) -> None:
 
     def _worker() -> None:
         result_queue.put(SpeakTaskResult(speak_result=speak(text)))
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def run_update_check_in_background(result_queue: ResultQueue, *, silent: bool) -> None:
+    """Starts a daemon thread that calls
+    jarvis.gui.updater.check_for_update() and posts an
+    UpdateCheckTaskResult when done. `silent` is carried through
+    unchanged so the UI thread knows whether this check was the
+    startup auto-check (no "up to date" toast needed) or a person
+    clicking "Check for updates" (which should say something either
+    way)."""
+    from jarvis.gui.updater import check_for_update
+
+    def _worker() -> None:
+        result_queue.put(UpdateCheckTaskResult(check_result=check_for_update(), silent=silent))
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def run_update_download_in_background(
+    check_result: Any, destination_dir, result_queue: ResultQueue, *, auto_install: bool
+) -> None:
+    """Starts a daemon thread that calls
+    jarvis.gui.updater.download_update() (which itself verifies the
+    SHA256 checksum before returning - see that function's docstring)
+    and posts an UpdateDownloadTaskResult when done."""
+    from jarvis.gui.updater import UpdateError, download_update
+
+    def _worker() -> None:
+        try:
+            zip_path = download_update(check_result, destination_dir=destination_dir)
+        except UpdateError as e:
+            result_queue.put(
+                UpdateDownloadTaskResult(zip_path=None, error=str(e), auto_install=auto_install)
+            )
+        else:
+            result_queue.put(
+                UpdateDownloadTaskResult(zip_path=zip_path, error=None, auto_install=auto_install)
+            )
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def run_update_install_in_background(zip_path, install_dir, result_queue: ResultQueue) -> None:
+    """Starts a daemon thread that installs an already-checksum-verified
+    update (jarvis.gui.updater.install_update()), verifies the newly
+    installed executable can start (verify_executable_starts()), and
+    rolls back (rollback_update()) if it can't - posting an
+    UpdateInstallTaskResult with the final outcome."""
+    from jarvis.gui.updater import UpdateError, install_update, rollback_update, verify_executable_starts
+
+    def _worker() -> None:
+        try:
+            exe_path = install_update(zip_path, install_dir=install_dir)
+        except UpdateError as e:
+            result_queue.put(UpdateInstallTaskResult(success=False, error=str(e)))
+            return
+
+        if verify_executable_starts(exe_path):
+            result_queue.put(UpdateInstallTaskResult(success=True, error=None))
+            return
+
+        rollback_update(install_dir=install_dir)
+        result_queue.put(
+            UpdateInstallTaskResult(
+                success=False,
+                error="Naujos versijos paleidimas nepavyko - grąžinta ankstesnė versija.",
+            )
+        )
 
     threading.Thread(target=_worker, daemon=True).start()
 
