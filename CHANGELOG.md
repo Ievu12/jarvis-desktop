@@ -4,6 +4,43 @@ All notable changes to JARVIS are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-23
+
+### Added
+- Redesigned the desktop app into a premium multi-panel dashboard:
+  a sidebar (Home, Chat, Tasks, Instagram, Gmail, Stripe, Content,
+  Analytics, Automations, Settings) with an ONLINE/THINKING/WORKING/
+  WAITING/ERROR status indicator, replacing the single chat window.
+  Dark graphite/blue-violet visual theme with subtle status-pulse and
+  fade animations.
+- `jarvis/gui/dashboard_data.py`: a new read-only service layer
+  exposing integration status, tasks, recent activity, and scheduled
+  automations (read from Windows Task Scheduler) to the new panels -
+  no duplicated business logic; every panel either reads through this
+  layer or triggers the existing chat/agent path.
+- Quick Actions across Home/Instagram/Gmail/Stripe/Content/Analytics
+  panels all route through one shared entry point
+  (`JarvisApp.submit_chat_message()`), the same `Agent.step()` path
+  chat and voice already used.
+- `scripts/dev_watch.py`: a live-reload development runner that
+  automatically restarts `python -m jarvis.gui.app` when `jarvis/**
+  *.py` changes, so source-run development no longer requires a manual
+  restart after every edit. Affects source runs only, never the
+  packaged `.exe`.
+- Settings window gained tabs for Updates (unchanged behavior),
+  General, Appearance, Notifications, Integrations, Automations, AI,
+  and Security (the last five currently informational/read-only,
+  pending their own settings model).
+
+### Changed
+- `jarvis/gui/app.py` restructured into a shell around the existing,
+  unmodified chat/voice/update logic - every existing widget attribute
+  and method (`self.transcript`, `self.send_button`, `self.mic_button`,
+  `self.status_label`, `self.voice_toggle`, `_submit_user_input()`,
+  etc.) keeps its exact name and behavior; the full existing test
+  suite passes unmodified except for one test adapted to the Settings
+  window's new nested tab structure.
+
 ## [1.0.2] - 2026-09-23
 
 ### Fixed
