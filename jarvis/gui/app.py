@@ -1,5 +1,8 @@
-"""JARVIS desktop window (customtkinter). Wraps the EXISTING agent/voice
-stack with no changes to their behavior:
+"""JARVIS desktop window (customtkinter): a multi-panel dashboard shell
+(sidebar navigation + Home/Chat/Tasks/Instagram/Gmail/Stripe/Content/
+Analytics/Automations/Settings views - see jarvis.gui.sidebar and
+jarvis.gui.views) wrapping the EXISTING agent/voice stack with no
+changes to their behavior:
 
   - jarvis.core.agent.Agent.step() for every text/voice turn - the same
     call jarvis.cli.main._run_agent_turn() and jarvis.voice.voice_loop
@@ -18,6 +21,19 @@ this module only ever touches widgets from the main thread, polling a
 queue.Queue with `.after()` for results - see jarvis.gui.worker's
 docstring for why. jarvis.cli.main (the terminal REPL) is not imported
 here and is completely unaffected by this window running.
+
+WHY chat/voice/update state still lives directly on JarvisApp (as
+self.transcript, self.send_button, self.mic_button, self.status_label,
+self.voice_toggle, self._history, self._submit_user_input(), the
+Settings popup, etc.) rather than each becoming its own view class like
+Home/Tasks/Instagram/etc: this is the exact, already-tested surface
+tests/test_gui_app.py and others assert against directly. The redesign
+adds a sidebar + swappable dashboard panels AROUND this unchanged core
+- the "Chat" nav item shows the very same widgets this module has
+always owned, not a reimplementation. New panels (jarvis.gui.views.*)
+read data only through jarvis.gui.dashboard_data or call back into this
+class's existing submit_chat_message()/_submit_user_input(), never a
+new/duplicated path into the agent, an integration, or a tool.
 """
 
 from __future__ import annotations
@@ -38,9 +54,21 @@ from jarvis.core.approval import set_outside_sandbox_handler, set_side_effect_ha
 from jarvis.core.llm import LLMClient
 from jarvis.core.project_notes import load_project_notes
 from jarvis.core.secrets import mask_secret
+from jarvis.gui import theme
 from jarvis.gui.confirmation_dialog import AskUserConfirmation
 from jarvis.gui.settings_store import UpdateSettings, load_update_settings, save_update_settings
+from jarvis.gui.sidebar import Sidebar
 from jarvis.gui.updater import UpdateCheckResult, default_download_dir
+from jarvis.gui.views.home import HomeView
+from jarvis.gui.views.simple_panels import (
+    AnalyticsView,
+    AutomationsView,
+    ContentView,
+    GmailView,
+    InstagramView,
+    StripeView,
+    TasksView,
+)
 from jarvis.gui.worker import (
     AgentStepResult,
     ListenTaskResult,
@@ -68,7 +96,8 @@ _STATUS_THINKING = "🧠 Thinking..."
 _STATUS_SPEAKING = "🔊 Speaking..."
 
 _WINDOW_TITLE = "JARVIS"
-_WINDOW_SIZE = "820x640"
+_WINDOW_SIZE = "1180x760"
+_MIN_WINDOW_SIZE = (900, 600)
 
 
 def _build_registry():
@@ -90,6 +119,8 @@ class JarvisApp:
         self.root = ctk.CTk()
         self.root.title(_WINDOW_TITLE)
         self.root.geometry(_WINDOW_SIZE)
+        self.root.minsize(*_MIN_WINDOW_SIZE)
+        self.root.configure(fg_color=theme.BG_PRIMARY)
 
         self.result_queue: "queue.Queue[Any]" = queue.Queue()
         self.voice_enabled = True
@@ -98,6 +129,8 @@ class JarvisApp:
         self.update_settings: UpdateSettings = load_update_settings()
         self._latest_update_check: UpdateCheckResult | None = None
         self._settings_window: ctk.CTkToplevel | None = None
+        self._views: dict[str, Any] = {}  # ctk frame subclasses (Any: no single common CTk frame base type across widget kinds)
+        self._current_view_key = "home"
 
         self._build_widgets()
         self._init_backend()
@@ -109,10 +142,42 @@ class JarvisApp:
     # --- widget construction ---------------------------------------------------
 
     def _build_widgets(self) -> None:
-        header = ctk.CTkFrame(self.root, fg_color="transparent")
+        # Shell layout: a fixed-width Sidebar on the left, a scrollable
+        # content area on the right that swaps between dashboard panels
+        # (see _navigate()). The Chat panel's own widgets
+        # (self.transcript/self.mic_button/self.send_button/etc.) are
+        # built by _build_chat_view() below into their own container
+        # frame, which is simply one of the panels this shell shows/
+        # hides - their construction and every attribute name is
+        # otherwise unchanged from before this redesign.
+        self.sidebar = Sidebar(self.root, on_navigate=self._navigate)
+        self.sidebar.pack(side="left", fill="y")
+
+        self.content_area = ctk.CTkFrame(self.root, fg_color=theme.BG_PRIMARY, corner_radius=0)
+        self.content_area.pack(side="left", fill="both", expand=True)
+
+        self._build_chat_view()
+        self._build_dashboard_views()
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._navigate("home")
+
+    def _build_chat_view(self) -> None:
+        """Builds the Chat panel - the exact widget set/behavior this
+        window has always had (transcript, mic button, text entry, send
+        button, voice toggle), now packed into its own container frame
+        (self._chat_container) instead of directly into self.root, so
+        the sidebar can show/hide it as one panel among several. No
+        widget's construction, attribute name, or event wiring changed."""
+        self._chat_container = ctk.CTkFrame(self.content_area, fg_color="transparent")
+
+        header = ctk.CTkFrame(self._chat_container, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(16, 4))
 
-        title_label = ctk.CTkLabel(header, text="JARVIS", font=ctk.CTkFont(size=24, weight="bold"))
+        title_label = ctk.CTkLabel(
+            header, text="JARVIS", font=ctk.CTkFont(family=theme.FONT_FAMILY, size=24, weight="bold"),
+            text_color=theme.TEXT_PRIMARY,
+        )
         title_label.pack(side="left")
 
         self.status_label = ctk.CTkLabel(header, text=_STATUS_READY, font=ctk.CTkFont(size=14))
@@ -123,12 +188,15 @@ class JarvisApp:
         )
         self.settings_button.pack(side="right", padx=(0, 12))
 
-        self.transcript = ctk.CTkTextbox(self.root, font=ctk.CTkFont(size=13), wrap="word")
+        self.transcript = ctk.CTkTextbox(
+            self._chat_container, font=ctk.CTkFont(size=13), wrap="word",
+            fg_color=theme.BG_CARD, corner_radius=theme.RADIUS_CARD,
+        )
         self.transcript.pack(fill="both", expand=True, padx=20, pady=10)
         self.transcript.configure(state="disabled")
         self._append_transcript("jarvis", "How can I help you?")
 
-        input_row = ctk.CTkFrame(self.root, fg_color="transparent")
+        input_row = ctk.CTkFrame(self._chat_container, fg_color="transparent")
         input_row.pack(fill="x", padx=20, pady=(0, 8))
 
         self.mic_button = ctk.CTkButton(
@@ -143,7 +211,7 @@ class JarvisApp:
         self.send_button = ctk.CTkButton(input_row, text="Send", width=72, command=self._on_send_clicked)
         self.send_button.pack(side="left")
 
-        voice_row = ctk.CTkFrame(self.root, fg_color="transparent")
+        voice_row = ctk.CTkFrame(self._chat_container, fg_color="transparent")
         voice_row.pack(fill="x", padx=20, pady=(0, 16))
 
         self.voice_toggle = ctk.CTkSwitch(
@@ -158,7 +226,83 @@ class JarvisApp:
         )
         self.api_key_label.pack(side="right")
 
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._views["chat"] = self._chat_container
+
+    def _build_dashboard_views(self) -> None:
+        """Constructs the remaining dashboard panels (Home + the
+        read-only/quick-action views in jarvis.gui.views) up front -
+        each is cheap to build (small widget trees, no network I/O at
+        construction beyond what jarvis.gui.dashboard_data's already-
+        fast local reads do) - and stores them in self._views, keyed by
+        the same nav keys jarvis.gui.sidebar.NAV_ITEMS uses, for
+        _navigate() to show/hide. Settings has no panel here - it opens
+        the existing _open_settings_window() popup instead (see
+        _navigate())."""
+        self._views["home"] = HomeView(
+            self.content_area, submit_chat_message=self.submit_chat_message, navigate=self._navigate,
+        )
+        self._views["tasks"] = TasksView(self.content_area)
+        self._views["instagram"] = InstagramView(
+            self.content_area, submit_chat_message=self.submit_chat_message, navigate=self._navigate,
+        )
+        self._views["gmail"] = GmailView(
+            self.content_area, submit_chat_message=self.submit_chat_message, navigate=self._navigate,
+        )
+        self._views["stripe"] = StripeView(
+            self.content_area, submit_chat_message=self.submit_chat_message, navigate=self._navigate,
+        )
+        self._views["content"] = ContentView(
+            self.content_area, submit_chat_message=self.submit_chat_message, navigate=self._navigate,
+        )
+        self._views["analytics"] = AnalyticsView(
+            self.content_area, submit_chat_message=self.submit_chat_message, navigate=self._navigate,
+        )
+        self._views["automations"] = AutomationsView(self.content_area)
+
+    # --- navigation ----------------------------------------------------------------------
+
+    def _navigate(self, key: str) -> None:
+        """Switches the visible dashboard panel. 'settings' is handled
+        specially: it opens the existing Settings popup
+        (_open_settings_window(), unchanged from before this redesign)
+        rather than becoming a panel, and does not change which panel
+        is behind it - see that method's own docstring for why."""
+        if key == "settings":
+            self._open_settings_window()
+            self.sidebar.set_active(self._current_view_key)
+            return
+
+        view = self._views.get(key)
+        if view is None:
+            return
+
+        current = self._views.get(self._current_view_key)
+        if current is not None:
+            current.pack_forget()
+
+        view.pack(fill="both", expand=True)
+        self._current_view_key = key
+        self.sidebar.set_active(key)
+
+        # Re-fetch this panel's data on every visit (not just at
+        # construction) so it never goes stale across a long session -
+        # each view's refresh() only re-reads jarvis.gui.dashboard_data
+        # (or, for Chat/static panels, does nothing - see each view's
+        # own refresh()).
+        refresh = getattr(view, "refresh", None)
+        if callable(refresh):
+            refresh()
+
+    def submit_chat_message(self, text: str) -> None:
+        """Public entry point for any view (Home's Quick Actions,
+        Instagram/Gmail/Stripe/Content/Analytics action buttons) to send
+        a message through the SAME path the Chat panel's Send
+        button/microphone already use - this is the one and only way a
+        view triggers agent activity; no view calls Agent.step() or a
+        connector/tool directly. Thin public wrapper around the
+        existing _submit_user_input(), which stays private since it's
+        also called internally (e.g. from a transcribed voice result)."""
+        self._submit_user_input(text)
 
     # --- backend initialization --------------------------------------------------
 
@@ -204,8 +348,23 @@ class JarvisApp:
         self.transcript.configure(state="disabled")
         self.transcript.see("end")
 
+    # Maps this method's existing emoji-labeled status strings (used
+    # verbatim by self.status_label, unchanged) to the sidebar's
+    # ONLINE/THINKING/WORKING/WAITING/ERROR vocabulary from the
+    # redesign brief - kept as a lookup here rather than changing what
+    # _set_status writes to status_label itself, since existing tests
+    # may depend on those exact strings.
+    _SIDEBAR_STATUS_MAP = {
+        _STATUS_READY: "ONLINE",
+        _STATUS_LISTENING: "WORKING",
+        _STATUS_THINKING: "THINKING",
+        _STATUS_SPEAKING: "WORKING",
+    }
+
     def _set_status(self, status: str) -> None:
         self.status_label.configure(text=status)
+        if hasattr(self, "sidebar"):
+            self.sidebar.set_status(self._SIDEBAR_STATUS_MAP.get(status, "ONLINE"))
 
     # --- sending a turn (typed or transcribed) -------------------------------------
 
@@ -256,6 +415,13 @@ class JarvisApp:
             if result.error:
                 self._append_transcript("jarvis", f"[error] {result.error}")
                 self._set_status(_STATUS_READY)
+                # Briefly flash the sidebar's ERROR state (additive -
+                # does not change status_label's own text, which stays
+                # _STATUS_READY exactly as before this redesign) so an
+                # error is visible in the persistent status indicator
+                # too, not only the transcript.
+                if hasattr(self, "sidebar"):
+                    self.sidebar.set_status("ERROR")
                 return
             reply = result.reply or ""
             self._append_transcript("jarvis", reply)
@@ -336,6 +502,21 @@ class JarvisApp:
     # --- settings window --------------------------------------------------------------
 
     def _open_settings_window(self) -> None:
+        """Opens the Settings popup. The Updates tab's widgets/behavior
+        below (self.check_updates_button, self.update_now_button,
+        self.settings_status_label, the three checkboxes) are BYTE-FOR-
+        BYTE unchanged from before this redesign - only now placed
+        inside a CTkTabview alongside informational-only tabs for the
+        remaining sections the redesign brief asks for (General,
+        Appearance, Notifications, Integrations, Automations, AI,
+        Security). Those extra tabs show live, read-only status via
+        jarvis.gui.dashboard_data where relevant (Integrations,
+        Automations) - never new configurable state, since there is no
+        existing settings model for those tabs to persist against yet.
+        A remained popup (not a sidebar panel) specifically so the
+        existing tests that open/inspect it via
+        self._settings_window/self._open_settings_window() keep working
+        unmodified."""
         if self._settings_window is not None and self._settings_window.winfo_exists():
             self._settings_window.focus()
             return
@@ -343,12 +524,32 @@ class JarvisApp:
         window = ctk.CTkToplevel(self.root)
         self._settings_window = window
         window.title("JARVIS Settings")
-        window.geometry("440x360")
+        window.geometry("560x480")
         window.resizable(False, False)
         window.attributes("-topmost", True)
+        window.configure(fg_color=theme.BG_PRIMARY)
 
+        tabs = ctk.CTkTabview(
+            window, fg_color=theme.BG_SURFACE, segmented_button_selected_color=theme.ACCENT_PRIMARY,
+            segmented_button_selected_hover_color=theme.ACCENT_PRIMARY_HOVER,
+        )
+        tabs.pack(fill="both", expand=True, padx=16, pady=16)
+
+        for tab_name in ("Updates", "General", "Appearance", "Notifications", "Integrations", "Automations", "AI", "Security"):
+            tabs.add(tab_name)
+
+        self._build_updates_tab(tabs.tab("Updates"))
+        self._build_placeholder_tab(tabs.tab("General"), "General settings will appear here in a future update.")
+        self._build_placeholder_tab(tabs.tab("Appearance"), "Appearance settings will appear here in a future update.")
+        self._build_placeholder_tab(tabs.tab("Notifications"), "Notification settings will appear here in a future update.")
+        self._build_integrations_tab(tabs.tab("Integrations"))
+        self._build_automations_tab(tabs.tab("Automations"))
+        self._build_placeholder_tab(tabs.tab("AI"), "AI/model settings will appear here in a future update.")
+        self._build_placeholder_tab(tabs.tab("Security"), "Security settings will appear here in a future update.")
+
+    def _build_updates_tab(self, tab) -> None:
         ctk.CTkLabel(
-            window, text="Updates", font=ctk.CTkFont(size=16, weight="bold"),
+            tab, text="Updates", font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(anchor="w", padx=20, pady=(20, 8))
 
         check_var = tk.BooleanVar(value=self.update_settings.check_for_updates)
@@ -364,23 +565,23 @@ class JarvisApp:
             save_update_settings(self.update_settings)
 
         ctk.CTkCheckBox(
-            window, text="Automatically check for updates", variable=check_var, command=_persist,
+            tab, text="Automatically check for updates", variable=check_var, command=_persist,
         ).pack(anchor="w", padx=24, pady=4)
         ctk.CTkCheckBox(
-            window, text="Automatically download updates", variable=download_var, command=_persist,
+            tab, text="Automatically download updates", variable=download_var, command=_persist,
         ).pack(anchor="w", padx=24, pady=4)
         ctk.CTkCheckBox(
-            window, text="Automatically install updates", variable=install_var, command=_persist,
+            tab, text="Automatically install updates", variable=install_var, command=_persist,
         ).pack(anchor="w", padx=24, pady=4)
 
         ctk.CTkLabel(
-            window, text=f"Current version: JARVIS v{__version__}", font=ctk.CTkFont(size=12),
+            tab, text=f"Current version: JARVIS v{__version__}", font=ctk.CTkFont(size=12),
         ).pack(anchor="w", padx=20, pady=(16, 4))
 
-        self.settings_status_label = ctk.CTkLabel(window, text="", font=ctk.CTkFont(size=12), text_color="gray")
+        self.settings_status_label = ctk.CTkLabel(tab, text="", font=ctk.CTkFont(size=12), text_color="gray")
         self.settings_status_label.pack(anchor="w", padx=20, pady=(0, 8))
 
-        button_row = ctk.CTkFrame(window, fg_color="transparent")
+        button_row = ctk.CTkFrame(tab, fg_color="transparent")
         button_row.pack(anchor="w", padx=16, pady=8)
 
         self.check_updates_button = ctk.CTkButton(
@@ -394,6 +595,49 @@ class JarvisApp:
         self.update_now_button.pack(side="left", padx=4)
 
         self._refresh_settings_status()
+
+    def _build_placeholder_tab(self, tab, message: str) -> None:
+        ctk.CTkLabel(
+            tab, text=message, font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_BODY),
+            text_color=theme.TEXT_MUTED, wraplength=480, justify="left",
+        ).pack(anchor="w", padx=20, pady=20)
+
+    def _build_integrations_tab(self, tab) -> None:
+        from jarvis.gui import dashboard_data
+
+        for status in dashboard_data.get_integration_statuses():
+            row = ctk.CTkFrame(tab, fg_color="transparent")
+            row.pack(fill="x", padx=20, pady=4)
+            ctk.CTkLabel(
+                row, text=status.service_name.replace("_", " ").title(),
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_BODY),
+                text_color=theme.TEXT_PRIMARY, width=140, anchor="w",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                row, text=status.status.value.replace("_", " ").upper(),
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),
+                text_color=theme.TEXT_SECONDARY, anchor="w",
+            ).pack(side="left")
+
+    def _build_automations_tab(self, tab) -> None:
+        from jarvis.gui import dashboard_data
+
+        automations = dashboard_data.get_automations()
+        if not automations:
+            self._build_placeholder_tab(tab, "No JARVIS automations found on this machine.")
+            return
+        for auto in automations:
+            row = ctk.CTkFrame(tab, fg_color="transparent")
+            row.pack(fill="x", padx=20, pady=4)
+            ctk.CTkLabel(
+                row, text=auto.name, font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_BODY),
+                text_color=theme.TEXT_PRIMARY, anchor="w",
+            ).pack(anchor="w")
+            ctk.CTkLabel(
+                row, text=f"Next run: {auto.next_run or '—'}",
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),
+                text_color=theme.TEXT_SECONDARY, anchor="w",
+            ).pack(anchor="w")
 
     def _refresh_settings_status(self) -> None:
         if not hasattr(self, "settings_status_label") or not self.settings_status_label.winfo_exists():

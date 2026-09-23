@@ -16,3 +16,4 @@ JARVIS_new/
 *.pfx
 *.p12
 _test_install/
+*.log

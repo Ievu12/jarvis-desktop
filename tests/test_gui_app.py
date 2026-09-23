@@ -294,14 +294,25 @@ def test_settings_window_opens_without_error(built_app):
     assert built_app._settings_window.winfo_exists()
 
 
+def _collect_label_texts(widget) -> list[str]:
+    """Recursively collects every CTkLabel's text under `widget` - the
+    Settings window's content now lives inside a CTkTabview's tab
+    frames (see _open_settings_window()'s docstring), so a direct
+    winfo_children() scan of the window itself no longer reaches labels
+    nested inside a tab; this walks the whole widget tree instead."""
+    texts = []
+    for child in widget.winfo_children():
+        if isinstance(child, ctk.CTkLabel):
+            texts.append(child.cget("text"))
+        texts.extend(_collect_label_texts(child))
+    return texts
+
+
 def test_settings_window_shows_current_version(built_app):
     from jarvis.__version__ import __version__
 
     built_app._open_settings_window()
-    all_text = []
-    for widget in built_app._settings_window.winfo_children():
-        if isinstance(widget, ctk.CTkLabel):
-            all_text.append(widget.cget("text"))
+    all_text = _collect_label_texts(built_app._settings_window)
     assert any(__version__ in t for t in all_text)
 
 
