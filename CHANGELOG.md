@@ -4,6 +4,19 @@ All notable changes to JARVIS are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-09-23
+
+### Fixed
+- **Critical**: `download_update()` and `install_update()` used the
+  same staging directory name ("JARVIS_new"), so `install_update()`
+  deleted the just-downloaded, checksum-verified update file before
+  ever reading it - every real update attempt would have failed at the
+  install step. Found via a live end-to-end test against the real
+  v1.0.1 release; fixed by giving the download its own directory
+  ("JARVIS_download", separate from install's internal staging area).
+  A regression test (a full real-file round trip through both
+  functions) now guards against this recurring.
+
 ## [1.0.1] - 2026-09-23
 
 ### Changed

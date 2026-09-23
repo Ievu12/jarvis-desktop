@@ -16,4 +16,4 @@ Bumping this is one explicit step of the release process documented in
 RELEASE.md - never done automatically by any test or build script.
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
