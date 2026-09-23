@@ -359,3 +359,67 @@ def test_check_for_update_request_carries_no_secret():
 
     for request in captured_requests:
         assert "Authorization" not in request.headers
+
+
+# --- regression: download_update()'s directory must never collide with -------------
+# --- install_update()'s internal staging directory ----------------------------------
+#
+# install_update() deletes-and-recreates its own staging directory as its
+# very first step. If the caller downloaded the already-verified update
+# zip into THAT SAME directory (e.g. by using the same "JARVIS_new" name
+# for both), install_update() would delete the zip out from under
+# itself before ever reading it - confirmed as a real bug via a live
+# end-to-end test against a real published GitHub release. These tests
+# guard against that regression at two levels: the directory names
+# themselves, and a full real-file round trip through both functions.
+
+
+def test_default_download_dir_differs_from_installs_internal_staging_dirname(tmp_path):
+    install_dir = tmp_path / "JARVIS"
+    download_dir = updater.default_download_dir(install_dir)
+    assert download_dir.name != updater._STAGING_DIRNAME
+    assert download_dir.name != updater._BACKUP_DIRNAME
+
+
+def test_download_then_install_full_round_trip_with_real_files(tmp_path):
+    # Uses default_download_dir() exactly as jarvis.gui.app does, then
+    # feeds the result straight into install_update() - if the two
+    # directories ever collide again, this fails with "not a zip file"
+    # (install_update() deleted what download_update() just verified)
+    # instead of only passing because each function was tested in
+    # isolation with an unrelated tmp_path.
+    source_zip_contents = tmp_path / "source"
+    source_zip_contents.mkdir()
+    zip_path = shutil.make_archive(
+        str(tmp_path / "release"), "zip", root_dir=source_zip_contents,
+    )
+    # make_archive() needs at least the root dir to exist; add the exe
+    # after, then re-zip so the archive actually contains JARVIS.exe.
+    (source_zip_contents / "JARVIS.exe").write_bytes(b"new real version bytes")
+    zip_path = shutil.make_archive(
+        str(tmp_path / "release"), "zip", root_dir=source_zip_contents,
+    )
+    zip_path = Path(zip_path)
+    sha256 = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+
+    install_dir = tmp_path / "JARVIS"
+    install_dir.mkdir()
+    (install_dir / "JARVIS.exe").write_bytes(b"old version bytes")
+
+    check_result = updater.UpdateCheckResult(
+        update_available=True, current_version="1.0.0", latest_version="2.0.0",
+        changelog=None, download_url="https://x/update.zip", checksum_url="https://x/SHA256SUMS.txt",
+    )
+    download_dir = updater.default_download_dir(install_dir)
+
+    def _fake_urlretrieve(url, filename):
+        if url.endswith("SHA256SUMS.txt"):
+            Path(filename).write_text(f"{sha256}  update.zip\n", encoding="utf-8")
+        else:
+            shutil.copy(zip_path, filename)
+
+    with patch("urllib.request.urlretrieve", side_effect=_fake_urlretrieve):
+        verified_zip = updater.download_update(check_result, destination_dir=download_dir)
+
+    exe_path = updater.install_update(verified_zip, install_dir=install_dir)
+    assert exe_path.read_bytes() == b"new real version bytes"

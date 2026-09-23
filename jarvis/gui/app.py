@@ -40,7 +40,7 @@ from jarvis.core.project_notes import load_project_notes
 from jarvis.core.secrets import mask_secret
 from jarvis.gui.confirmation_dialog import AskUserConfirmation
 from jarvis.gui.settings_store import UpdateSettings, load_update_settings, save_update_settings
-from jarvis.gui.updater import UpdateCheckResult
+from jarvis.gui.updater import UpdateCheckResult, default_download_dir
 from jarvis.gui.worker import (
     AgentStepResult,
     ListenTaskResult,
@@ -429,9 +429,9 @@ class JarvisApp:
         run_update_check_in_background(self.result_queue, silent=silent)
 
     def _download_update(self, result: UpdateCheckResult, *, auto_install: bool) -> None:
-        staging_dir = JARVIS_ROOT.parent / "JARVIS_new"
+        download_dir = default_download_dir(JARVIS_ROOT)
         run_update_download_in_background(
-            result, staging_dir, self.result_queue, auto_install=auto_install
+            result, download_dir, self.result_queue, auto_install=auto_install
         )
 
     def _on_update_now_clicked(self) -> None:

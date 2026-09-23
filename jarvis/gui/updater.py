@@ -60,6 +60,18 @@ _DOWNLOAD_TIMEOUT_SECONDS = 120
 # person edits with Claude Code (this matters for the desktop-installed
 # copy, which is a separate PyInstaller build directory, not this
 # checked-out source tree - see RELEASE.md).
+#
+# Deliberately TWO DIFFERENT directories for the downloaded zip
+# (_DOWNLOAD_DIRNAME) vs. install_update()'s extraction staging area
+# (_STAGING_DIRNAME): install_update() deletes and recreates
+# _STAGING_DIRNAME as its very first step (see install_update()'s own
+# code) - if the caller's already-downloaded, checksum-verified zip
+# lived in that same directory, install_update() would delete the zip
+# out from under itself before ever reading it. Confirmed as a real bug
+# via a live end-to-end test against a real published GitHub release
+# before this fix - never reuse these two directory names for each
+# other's purpose.
+_DOWNLOAD_DIRNAME = "JARVIS_download"
 _STAGING_DIRNAME = "JARVIS_new"
 _BACKUP_DIRNAME = "JARVIS_backup"
 
@@ -179,14 +191,27 @@ def _sha256_of_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def default_download_dir(install_dir: Path) -> Path:
+    """The recommended `destination_dir` for download_update(), given
+    the running installation's directory - a sibling of install_dir,
+    named distinctly from install_update()'s own _STAGING_DIRNAME (see
+    the comment above that constant for why they must never collide).
+    jarvis.gui.app uses this rather than hardcoding the directory name
+    itself, so this module stays the one place that name is defined."""
+    return install_dir.parent / _DOWNLOAD_DIRNAME
+
+
 def download_update(update: UpdateCheckResult, *, destination_dir: Path) -> Path:
     """Downloads the release zip AND its SHA256SUMS.txt, verifies the
     zip's checksum, and returns the path to the verified zip. Raises
     UpdateError (never a bare exception) on any failure - missing URLs,
     network error, or a checksum mismatch - and in every failure case
     the currently-running installation is untouched, since this
-    function only ever writes into `destination_dir` (the staging area,
-    e.g. JARVIS_new/), never over the running program's own files."""
+    function only ever writes into `destination_dir` (see
+    default_download_dir() for the recommended location - MUST NOT be
+    the same directory install_update() uses internally for extraction,
+    see _STAGING_DIRNAME's comment), never over the running program's
+    own files."""
     if not update.download_url:
         raise UpdateError("Naujos versijos atsisiuntimo nuoroda nerasta.")
     if not update.checksum_url:
