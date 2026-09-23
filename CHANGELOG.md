@@ -4,6 +4,22 @@ All notable changes to JARVIS are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-09-23
+
+### Changed
+- Made the `jarvis-desktop` GitHub repository public. The private
+  repository required an authenticated request to even list releases,
+  which would have meant embedding a GitHub token in the distributed
+  JARVIS.exe to make auto-update work - against this project's own
+  "no API keys in source/binaries" principle. No integration
+  credential (Instagram, Gmail, Stripe, Azure, Anthropic) was ever in
+  source control; only the application code itself is now public.
+
+### Fixed
+- End-to-end verification of the real auto-update flow against a
+  published GitHub release (this version exists specifically to prove
+  that flow works before relying on it).
+
 ## [1.0.0] - 2026-09-23
 
 ### Added
