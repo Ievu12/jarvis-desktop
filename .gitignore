@@ -17,3 +17,4 @@ JARVIS_new/
 *.p12
 _test_install/
 *.log
+.claude/

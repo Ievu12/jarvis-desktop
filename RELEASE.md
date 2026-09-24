@@ -33,6 +33,40 @@ by hand. It always runs in this order; never skip a step.
    `packaging` (already in `pyproject.toml`'s dependencies, installed in
    `.venv`).
 
+## Known limitation on this machine: Windows Smart App Control
+
+As of the v1.1.0 build, this machine also has **Smart App Control**
+turned **On** (`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy!VerifiedAndReputablePolicyState = 1`)
+- a separate, reputation-based mechanism from WDAC/Application Control.
+It blocks launching `dist\JARVIS\JARVIS.exe` even though the file is
+correctly signed with a valid, trusted certificate (confirmed via
+`Get-AuthenticodeSignature` returning `Valid`) - Smart App Control
+additionally requires the file itself to have an established
+reputation, which a locally-built, self-signed .exe never will.
+Confirmed root cause via `Get-WinEvent -LogName
+"Microsoft-Windows-CodeIntegrity/Operational"` (Event ID 3077/3118,
+"Smart App Control Block").
+
+**This cannot be worked around by re-signing or rebuilding** - it is
+not a signature problem. Microsoft does not provide a way to turn Smart
+App Control back off once set to "On" short of reinstalling Windows, so
+this is a standing limitation on this specific machine, not something
+scripts/build_release.py or the certificate can fix.
+
+**Practical result**: on this machine, run JARVIS from source instead
+of the packaged .exe - `python.exe` is already a trusted, reputable
+system executable Smart App Control does not block:
+- `python -m jarvis.gui.app` (or double-click the `JARVIS` desktop
+  shortcut, which runs `scripts\launch_jarvis.bat` → the same command).
+- `python scripts\dev_watch.py` for live-reload development.
+
+The GitHub Releases/auto-update pipeline itself is unaffected and still
+fully verified end-to-end (see the CHANGELOG entries for v1.0.1-1.0.2) -
+this limitation is specific to launching a freshly-built, unpronounced
+.exe *on this one machine*, not a defect in the release process. A
+machine without Smart App Control enabled runs the packaged .exe
+normally once the certificate (or a real CA-issued one) is trusted.
+
 ## Every release: the exact steps
 
 ### 1. Make the code change
