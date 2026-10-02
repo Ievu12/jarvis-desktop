@@ -251,7 +251,22 @@ def _assert_matches(exact, preview, base, *, max_mean_difference=6.0):
     TextOverlay(text="Pop", start_seconds=0.5, end_seconds=3, animation="pop_up", font_size=120),
     TextOverlay(text="Rašau tekstą", start_seconds=0.5, end_seconds=3, animation="typewriter", font_size=80),
     TextOverlay(text="Pasuktas", start_seconds=0.5, end_seconds=3, font_size=90, rotation_degrees=30),
-], ids=["plain-lithuanian", "bounce", "pop_up", "typewriter", "rotated"])
+    TextOverlay(text="Kontūras ąčę", start_seconds=0.5, end_seconds=3, font_size=90, outline_width=6,
+                outline_color="#1B3CFF"),
+    TextOverlay(text="Šešėlis", start_seconds=0.5, end_seconds=3, font_size=90, shadow_offset=8,
+                shadow_color="black", shadow_opacity=0.7),
+    TextOverlay(text="Etiketė žąsis", start_seconds=0.5, end_seconds=3, font_size=70, color="black",
+                background_color="#FFD700", background_opacity=1.0),
+    TextOverlay(text="Viskas kartu", start_seconds=0.5, end_seconds=3, font_size=80, animation="fade",
+                fade_seconds=1.0, outline_width=4, shadow_offset=5, background_opacity=0.5),
+    TextOverlay(text="Švytėjimas", start_seconds=0.5, end_seconds=3, font_size=80, animation="glow",
+                color="#7FDBFF", background_opacity=0.6),
+    TextOverlay(text="Pasuktas fonas", start_seconds=0.5, end_seconds=3, font_size=70, rotation_degrees=-20,
+                outline_width=4, background_opacity=0.7, background_color="#C9A7FF"),
+    TextOverlay(text="Kitas šriftas ąčę", start_seconds=0.5, end_seconds=3, font_size=80, font="georgia",
+                outline_width=3),
+], ids=["plain-lithuanian", "bounce", "pop_up", "typewriter", "rotated", "outline", "shadow", "box",
+        "all-styles-fading", "glow-box", "rotated-styled", "other-font"])
 def test_text_preview_matches_export(parity_env, parity_font, overlay):
     t = 0.83 if overlay.animation == "typewriter" else 0.6 if overlay.animation == "pop_up" else 1.0
     exact, preview, base = _export_vs_preview(parity_env, t=t, texts=[overlay])
@@ -290,6 +305,18 @@ def test_caption_preview_matches_export(parity_env, parity_font):
         style=CaptionStyle(animation="none", shadow_offset=3),
     )
     _assert_matches(exact, preview, base)
+
+
+def test_styled_caption_with_another_font_matches_export(parity_env, parity_font):
+    exact, preview, base = _export_vs_preview(
+        parity_env, t=1.0, lines=[CaptionLine(text="Žiūrėk čia ąčęėįšųūž", start_seconds=0.5, end_seconds=3)],
+        style=CaptionStyle(animation="none", font="times", outline_width=4, outline_color="#1B3CFF",
+                           shadow_offset=4, background=False, color="#FFD700"),
+    )
+    # Thin serifs with a yellow-on-blue outline: almost every pixel is an
+    # edge, where yuv420p halves the color resolution - so a little more
+    # difference than for a plain sans text, though they look the same.
+    _assert_matches(exact, preview, base, max_mean_difference=12.0)
 
 
 def test_compose_draws_on_a_copy():

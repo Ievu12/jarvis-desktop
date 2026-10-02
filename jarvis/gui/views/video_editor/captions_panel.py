@@ -29,6 +29,7 @@ from jarvis.gui.views.video_editor.common import LabeledDropdown, status_label
 from jarvis.gui.widgets import Card
 from jarvis.video_editor.captions import (
     CAPTION_ANIMATION_CHOICES,
+    CAPTION_STYLE_PRESETS,
     CAPTION_LANGUAGE_CHOICES,
     CAPTION_LANGUAGE_LABELS,
     CAPTION_POSITION_CHOICES,
@@ -38,8 +39,11 @@ from jarvis.video_editor.captions import (
     DEFAULT_CAPTION_LANGUAGE,
     CaptionLine,
     CaptionStyle,
+    apply_caption_preset,
 )
+from jarvis.video_editor.text_render import FONT_CHOICES, FONT_LABELS
 
+_FONT_DISPLAY_CHOICES = tuple(FONT_LABELS[font] for font in FONT_CHOICES)
 _LANGUAGE_DISPLAY_CHOICES = tuple(CAPTION_LANGUAGE_LABELS[code] for code in CAPTION_LANGUAGE_CHOICES)
 _LANGUAGE_CODE_BY_LABEL = {label: code for code, label in CAPTION_LANGUAGE_LABELS.items()}
 
@@ -81,6 +85,10 @@ class CaptionsPanel(ctk.CTkFrame):
         self._on_export_srt_requested = on_export_srt_requested
         self._enabled = False
         self._lines: list[CaptionLine] = []
+        # Style values with no control of their own, kept so an applied
+        # template or style survives the next edit.
+        self._outline_color = "black"
+        self._shadow_color = CaptionStyle().shadow_color
 
         card = Card(self)
         card.pack(fill="x")
@@ -127,6 +135,25 @@ class CaptionsPanel(ctk.CTkFrame):
                 self._controls_row, text="📝 Generate & Edit Subtitles", width=190,
                 command=self._on_generate_clicked,
             ).pack(side="left", padx=(theme.SPACE_MD, 0))
+
+        self._looks_row = ctk.CTkFrame(self._inner, fg_color="transparent")
+        ctk.CTkLabel(
+            self._looks_row, text="Subtitrų stilius:",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_SECONDARY,
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        self.preset_buttons: dict[str, ctk.CTkButton] = {}
+        for n, name in enumerate(CAPTION_STYLE_PRESETS):
+            button = ctk.CTkButton(
+                self._looks_row, text=name, width=96, height=26, command=lambda n=name: self.apply_preset(n),
+                fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
+                border_color=theme.BORDER_SUBTLE,
+            )
+            button.grid(row=1 + n // 3, column=n % 3, padx=(0, theme.SPACE_XS), pady=(0, theme.SPACE_XS), sticky="w")
+            self.preset_buttons[name] = button
+        self._font_dropdown = LabeledDropdown(self._looks_row, "Šriftas:", _FONT_DISPLAY_CHOICES)
+        self._font_dropdown.dropdown.configure(command=lambda _v: self._emit())
+        self._font_dropdown.grid(row=3, column=0, columnspan=2, sticky="we")
 
         self._style_row = ctk.CTkFrame(self._inner, fg_color="transparent")
 
@@ -191,7 +218,34 @@ class CaptionsPanel(ctk.CTkFrame):
             entry.delete(0, "end")
             entry.insert(0, value)
         self._background_var.set("on" if style.background else "off")
+        self._font_dropdown.set(FONT_LABELS.get(style.font, _FONT_DISPLAY_CHOICES[0]))
+        self._outline_color, self._shadow_color = style.outline_color, style.shadow_color
         self._on_toggle()
+
+    def current_style(self) -> CaptionStyle | None:
+        """The style the controls show, or None while a number field
+        holds something that isn't a number."""
+        try:
+            font_size = int(self._font_size_entry.get())
+            outline_width = int(self._outline_width_entry.get())
+            shadow_offset = int(self._shadow_offset_entry.get())
+        except ValueError:
+            return None
+        return CaptionStyle(
+            animation=self._animation_dropdown.get(), position=self._position_dropdown.get(),
+            font_size=font_size, color=self._color_entry.get().strip() or DEFAULT_CAPTION_COLOR,
+            highlight_color=self._highlight_color_entry.get().strip() or DEFAULT_CAPTION_HIGHLIGHT_COLOR,
+            outline_width=outline_width, shadow_offset=shadow_offset,
+            background=self._background_var.get() == "on",
+            outline_color=self._outline_color, shadow_color=self._shadow_color,
+            font=FONT_CHOICES[_FONT_DISPLAY_CHOICES.index(self._font_dropdown.get())],
+        )
+
+    def apply_preset(self, name: str) -> None:
+        """A subtitle look (captions.CAPTION_STYLE_PRESETS) on top of the
+        current size, position and animation."""
+        style = self.current_style() or CaptionStyle()
+        self.apply_style(apply_caption_preset(style, name))
 
     def reset(self) -> None:
         """Captions OFF and no lines - the state of a project that never
@@ -200,6 +254,7 @@ class CaptionsPanel(ctk.CTkFrame):
         self._toggle_var.set("off")
         self._enabled = False
         self._controls_row.pack_forget()
+        self._looks_row.pack_forget()
         self._style_row.pack_forget()
         self._lines = []
         for child in self._lines_container.winfo_children():
@@ -314,9 +369,11 @@ class CaptionsPanel(ctk.CTkFrame):
         self._enabled = self._toggle_var.get() == "on"
         if self._enabled:
             self._controls_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
+            self._looks_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
             self._style_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
         else:
             self._controls_row.pack_forget()
+            self._looks_row.pack_forget()
             self._style_row.pack_forget()
         self._emit()
 
@@ -324,17 +381,6 @@ class CaptionsPanel(ctk.CTkFrame):
         if not self._enabled:
             self._on_style_changed(None)
             return
-        try:
-            font_size = int(self._font_size_entry.get())
-            outline_width = int(self._outline_width_entry.get())
-            shadow_offset = int(self._shadow_offset_entry.get())
-        except ValueError:
-            return
-        style = CaptionStyle(
-            animation=self._animation_dropdown.get(), position=self._position_dropdown.get(),
-            font_size=font_size, color=self._color_entry.get().strip() or DEFAULT_CAPTION_COLOR,
-            highlight_color=self._highlight_color_entry.get().strip() or DEFAULT_CAPTION_HIGHLIGHT_COLOR,
-            outline_width=outline_width, shadow_offset=shadow_offset,
-            background=self._background_var.get() == "on",
-        )
-        self._on_style_changed(style)
+        style = self.current_style()
+        if style is not None:
+            self._on_style_changed(style)

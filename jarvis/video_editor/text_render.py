@@ -32,6 +32,53 @@ _FALLBACK_FONT_FILES = (
 )
 
 
+DEFAULT_FONT = "arial_bold"
+FONT_CHOICES: tuple[str, ...] = (
+    "arial_bold", "arial", "impact", "verdana", "trebuchet", "segoe", "georgia", "times", "comic", "courier",
+)
+FONT_LABELS: dict[str, str] = {
+    "arial_bold": "Arial Bold",
+    "arial": "Arial",
+    "impact": "Impact",
+    "verdana": "Verdana Bold",
+    "trebuchet": "Trebuchet Bold",
+    "segoe": "Segoe UI Bold",
+    "georgia": "Georgia Bold",
+    "times": "Times New Roman Bold",
+    "comic": "Comic Sans Bold",
+    "courier": "Courier New Bold",
+}
+# Every one is a standard Windows font with the full Lithuanian
+# alphabet (ąčęėįšųūž). The second entry is a metric-compatible or
+# similar free font, used where the Windows one isn't installed.
+_FONT_FILES: dict[str, tuple[str, ...]] = {
+    "arial": ("C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+    "impact": ("C:/Windows/Fonts/impact.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    "verdana": ("C:/Windows/Fonts/verdanab.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    "trebuchet": ("C:/Windows/Fonts/trebucbd.ttf", "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"),
+    "segoe": ("C:/Windows/Fonts/segoeuib.ttf", "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"),
+    "georgia": ("C:/Windows/Fonts/georgiab.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"),
+    "times": ("C:/Windows/Fonts/timesbd.ttf", "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"),
+    "comic": ("C:/Windows/Fonts/comicbd.ttf", "/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf"),
+    "courier": ("C:/Windows/Fonts/courbd.ttf", "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf"),
+}
+
+
+def resolve_font_file(font: str, default_file: str) -> str:
+    """The font file for font key `font` (FONT_CHOICES). The default
+    font, an unknown key, or a font not installed on this computer all
+    give `default_file` - so the export never names a missing file and
+    the preview (which uses the same path) always matches it."""
+    for candidate in _FONT_FILES.get(font, ()):
+        if Path(candidate).is_file():
+            return candidate
+    return default_file
+
+
+def font_is_available(font: str) -> bool:
+    return font == DEFAULT_FONT or any(Path(c).is_file() for c in _FONT_FILES.get(font, ()))
+
+
 @lru_cache(maxsize=256)
 def _load_font(font_file: str, size_tenths: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     size = max(1.0, size_tenths / 10)
@@ -120,16 +167,84 @@ def draw_text(
         layer.alpha_composite(target)
 
 
+@dataclass(frozen=True)
+class TextLook:
+    """Outline, drop shadow and background box, in final pixels -
+    drawn the way ffmpeg drawtext's borderw/shadowx/box options draw
+    them: the box spans the text box plus `box_padding` on every side,
+    the shadow is the outlined text moved by `shadow_offset`, then the
+    outline, then the text."""
+
+    outline_width: int = 0
+    outline_color: tuple[int, int, int, int] = (0, 0, 0, 255)
+    shadow_offset: int = 0
+    shadow_color: tuple[int, int, int, int] = (0, 0, 0, 153)
+    box_padding: int = 0
+    box_color: tuple[int, int, int, int] | None = None
+
+    @property
+    def extent(self) -> int:
+        """How far past the text box anything of this look reaches."""
+        return max(self.outline_width + abs(self.shadow_offset), self.box_padding if self.box_color else 0)
+
+    def faded(self, alpha: float) -> "TextLook":
+        """This look with every color's opacity multiplied by `alpha`
+        (drawtext's alpha= applies to text, outline, shadow and box)."""
+        if alpha >= 1.0:
+            return self
+        scale = lambda rgba: (rgba[0], rgba[1], rgba[2], round(rgba[3] * alpha))  # noqa: E731
+        return TextLook(
+            self.outline_width, scale(self.outline_color), self.shadow_offset, scale(self.shadow_color),
+            self.box_padding, scale(self.box_color) if self.box_color else None,
+        )
+
+
+PLAIN_LOOK = TextLook()
+
+
+def draw_styled_text(
+    layer: Image.Image, text: str, *, font, x: float, y: float, fill: tuple[int, int, int, int],
+    look: TextLook = PLAIN_LOOK,
+) -> None:
+    """draw_text() plus `look`'s background box, shadow and outline."""
+    if not text:
+        return
+    if look.box_color is not None and look.box_color[3] > 0:
+        metrics = measure(text, font)
+        pad = look.box_padding
+        box = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+        ImageDraw.Draw(box).rectangle(
+            [round(x - pad), round(y - pad), round(x + metrics.width + pad) - 1, round(y + metrics.height + pad) - 1],
+            fill=look.box_color,
+        )
+        layer.alpha_composite(box)
+    stroke = look.outline_width
+    if look.shadow_offset and look.shadow_color[3] > 0:
+        draw_text(
+            layer, text, font=font, x=x + look.shadow_offset, y=y + look.shadow_offset, fill=look.shadow_color,
+            stroke_width=stroke, stroke_fill=look.shadow_color if stroke else None,
+        )
+    if stroke:
+        # drawtext's border is a filled, widened glyph drawn UNDER the
+        # text, so with a see-through text color it shows through.
+        draw_text(
+            layer, text, font=font, x=x, y=y, fill=look.outline_color,
+            stroke_width=stroke, stroke_fill=look.outline_color,
+        )
+    draw_text(layer, text, font=font, x=x, y=y, fill=fill)
+
+
 def render_text_block(
-    text: str, *, font, fill: tuple[int, int, int, int], padding: int = 4,
+    text: str, *, font, fill: tuple[int, int, int, int], padding: int = 4, look: TextLook = PLAIN_LOOK,
 ) -> tuple[Image.Image, TextMetrics]:
-    """Renders `text` alone onto a tight transparent image (plus
-    `padding` px on every side, so anti-aliased edges and rotation
-    aren't clipped). The ink box occupies (padding, padding) to
-    (padding + width, padding + height) of the returned image."""
+    """Renders `text` alone (with `look`) onto a tight transparent
+    image, with `padding` px plus the look's own reach on every side,
+    so anti-aliased edges and rotation aren't clipped. The text box is
+    centered in the returned image."""
     metrics = measure(text, font)
+    padding += look.extent
     width = max(1, round(metrics.width) + padding * 2)
     height = max(1, round(metrics.height) + padding * 2)
     block = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw_text(block, text, font=font, x=padding, y=padding, fill=fill)
+    draw_styled_text(block, text, font=font, x=padding, y=padding, fill=fill, look=look)
     return block, metrics

@@ -14,9 +14,10 @@ data, no mechanism of its own."""
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
-from jarvis.video_editor.text_overlay import TextAnimation, TextSlideDirection
+from jarvis.video_editor.text_overlay import TextAnimation, TextOverlay, TextSlideDirection
 
 
 @dataclass(frozen=True)
@@ -90,3 +91,46 @@ _PALETTES_BY_NAME: dict[str, ColorPalette] = {p.name: p for p in COLOR_PALETTES}
 
 def get_color_palette(name: str) -> ColorPalette | None:
     return _PALETTES_BY_NAME.get(name)
+
+
+@dataclass(frozen=True)
+class TextStylePreset:
+    """One named look for a text: font, color, outline, shadow and
+    background together (requirement: "teksto kontūrai, šešėliai,
+    šriftai"). Applying it replaces only those style fields - the text,
+    timing, position, size and animation stay the person's own."""
+
+    name: str
+    font: str = "arial_bold"
+    color: str = "white"
+    outline_width: int = 0
+    outline_color: str = "black"
+    shadow_offset: int = 0
+    shadow_color: str = "black"
+    shadow_opacity: float = 0.6
+    background_opacity: float = 0.0
+    background_color: str = "black"
+
+
+TEXT_STYLE_PRESETS: tuple[TextStylePreset, ...] = (
+    TextStylePreset(name="Paprastas"),
+    TextStylePreset(name="Kontūras", outline_width=5),
+    TextStylePreset(name="Šešėlis", shadow_offset=6, shadow_opacity=0.7),
+    TextStylePreset(name="Etiketė", background_opacity=0.6),
+    TextStylePreset(name="Geltona juosta", color="black", background_color="#FFD700", background_opacity=1.0),
+    TextStylePreset(name="TikTok", font="impact", outline_width=6),
+    TextStylePreset(name="Neonas", color="#7FDBFF", outline_width=3, outline_color="#1B3CFF", shadow_offset=4,
+                    shadow_color="#1B3CFF", shadow_opacity=0.5),
+    TextStylePreset(name="Elegantiškas", font="georgia", shadow_offset=4, shadow_opacity=0.5),
+    TextStylePreset(name="Mielas", font="comic", color="#FF6B9D", outline_width=4, outline_color="white"),
+)
+TEXT_STYLE_PRESET_NAMES: tuple[str, ...] = tuple(p.name for p in TEXT_STYLE_PRESETS)
+
+_STYLE_FIELDS = (
+    "font", "color", "outline_width", "outline_color", "shadow_offset", "shadow_color", "shadow_opacity",
+    "background_opacity", "background_color",
+)
+
+
+def apply_text_style(overlay: TextOverlay, preset: TextStylePreset) -> TextOverlay:
+    return dataclasses.replace(overlay, **{name: getattr(preset, name) for name in _STYLE_FIELDS})

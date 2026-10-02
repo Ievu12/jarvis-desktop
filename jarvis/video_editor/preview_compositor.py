@@ -21,6 +21,7 @@ canvas_width` before drawing."""
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from functools import lru_cache
@@ -31,7 +32,7 @@ from PIL import Image, ImageSequence
 
 from jarvis.video_editor import text_overlay as text_overlay_module
 from jarvis.video_editor import text_render
-from jarvis.video_editor.captions import CaptionLine, CaptionStyle
+from jarvis.video_editor.captions import CaptionLine, CaptionStyle, caption_font_file
 from jarvis.video_editor.stickers import (
     StickerInstance,
     blink_dim_factor,
@@ -96,12 +97,6 @@ class ElementBox:
 def _visible(start: float, end: float, t: float) -> bool:
     # ffmpeg's between(t,start,end) is inclusive at both ends.
     return start <= t <= end
-
-
-def _font_file() -> str:
-    # Read at call time so tests (and a future font picker) can point
-    # the export and the preview at the same font.
-    return text_overlay_module._DEFAULT_FONT_FILE
 
 
 # --- stickers ------------------------------------------------------------------------------
@@ -256,14 +251,17 @@ def _draw_text_overlay(layer: Image.Image, overlay: TextOverlay, *, t: float, sc
         return
 
     text = _typewriter_text(overlay, t) if overlay.animation == "typewriter" else overlay.text
-    font = text_render.load_font(_font_file(), _text_font_size(overlay, t, base_size))
+    font = text_render.load_font(overlay.font_file, _text_font_size(overlay, t, base_size))
+    look = text_overlay_module.text_look(overlay, scale)
     metrics = text_render.measure(text, font)
     x, y = _text_position(overlay, metrics, frame_w, frame_h)
     local = t - overlay.start_seconds
     animation = overlay.animation
 
     if animation == "fade":
-        fill = _with_alpha(fill, _fade_alpha(overlay, t))
+        alpha = _fade_alpha(overlay, t)
+        fill = _with_alpha(fill, alpha)
+        look = look.faded(alpha)
     elif animation in ("slide_in", "slide_out"):
         offset = (-1 if overlay.direction == "left" else 1) * 600 * scale
         if animation == "slide_in":
@@ -286,22 +284,22 @@ def _draw_text_overlay(layer: Image.Image, overlay: TextOverlay, *, t: float, sc
             text_render.draw_text(layer, text, font=font, x=x + jitter + extra, y=y, fill=text_render.parse_color(color))
         x += jitter
     elif animation == "glow":
+        # The halo is drawtext's border, so it takes the outline's place.
         halo = max(1, round(6 * overlay.intensity))
-        text_render.draw_text(
-            layer, text, font=font, x=x, y=y, fill=fill,
-            stroke_width=max(1, round(halo * scale)), stroke_fill=_with_alpha(fill, 0.5),
-        )
-        return
+        look = dataclasses.replace(look, outline_width=max(1, round(halo * scale)), outline_color=_with_alpha(fill, 0.5))
 
-    text_render.draw_text(layer, text, font=font, x=x, y=y, fill=fill)
+    text_render.draw_styled_text(layer, text, font=font, x=x, y=y, fill=fill, look=look)
 
 
 def _draw_rotated_text(layer: Image.Image, overlay: TextOverlay, *, t: float, scale: float, fill) -> None:
     """Mirrors text_overlay.build_rotated_text_filters()."""
+    look = text_overlay_module.text_look(overlay, scale)
     if overlay.animation == "fade":
-        fill = _with_alpha(fill, _fade_alpha(overlay, t))
-    font = text_render.load_font(_font_file(), overlay.font_size * scale)
-    block, metrics = text_render.render_text_block(overlay.text, font=font, fill=fill)
+        alpha = _fade_alpha(overlay, t)
+        fill = _with_alpha(fill, alpha)
+        look = look.faded(alpha)
+    font = text_render.load_font(overlay.font_file, overlay.font_size * scale)
+    block, metrics = text_render.render_text_block(overlay.text, font=font, fill=fill, look=look)
     rotated = block.rotate(-overlay.rotation_degrees, expand=True, resample=Image.Resampling.BICUBIC)
     center_x = (layer.width - metrics.width) * overlay.x_fraction + metrics.width / 2
     center_y = (layer.height - metrics.height) * overlay.y_fraction + metrics.height / 2
@@ -313,10 +311,8 @@ def _draw_rotated_text(layer: Image.Image, overlay: TextOverlay, *, t: float, sc
 
 def _draw_caption_line(layer: Image.Image, line: CaptionLine, style: CaptionStyle, *, scale: float) -> None:
     """Mirrors captions.build_caption_filter_from_lines() + _style_suffix()."""
-    from PIL import ImageDraw
-
     frame_w, frame_h = layer.size
-    font = text_render.load_font(_font_file(), style.font_size * scale)
+    font = text_render.load_font(caption_font_file(style), style.font_size * scale)
     metrics = text_render.measure(line.text, font)
     x = (frame_w - metrics.width) / 2
     if style.position == "top":
@@ -326,22 +322,17 @@ def _draw_caption_line(layer: Image.Image, line: CaptionLine, style: CaptionStyl
     else:
         y = frame_h * 0.8
 
-    if style.background:
-        pad = 10 * scale
-        box = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-        ImageDraw.Draw(box).rectangle(
-            [x - pad, y - pad, x + metrics.width + pad, y + metrics.height + pad], fill=(0, 0, 0, 128),
-        )
-        layer.alpha_composite(box)
-    if style.shadow_offset != 0:
-        offset = style.shadow_offset * scale
-        text_render.draw_text(
-            layer, line.text, font=font, x=x + offset, y=y + offset, fill=text_render.parse_color(style.shadow_color),
-        )
     stroke = round(style.outline_width * scale) if style.outline_width > 0 else 0
-    text_render.draw_text(
-        layer, line.text, font=font, x=x, y=y, fill=text_render.parse_color(style.color),
-        stroke_width=stroke, stroke_fill=text_render.parse_color(style.outline_color) if stroke else None,
+    look = text_render.TextLook(
+        outline_width=stroke,
+        outline_color=text_render.parse_color(style.outline_color, default="black"),
+        shadow_offset=round(style.shadow_offset * scale),
+        shadow_color=text_render.parse_color(style.shadow_color, default="black"),
+        box_padding=round(10 * scale) if style.background else 0,
+        box_color=(0, 0, 0, 128) if style.background else None,
+    )
+    text_render.draw_styled_text(
+        layer, line.text, font=font, x=x, y=y, fill=text_render.parse_color(style.color), look=look,
     )
 
 
@@ -409,7 +400,7 @@ def element_boxes(scene: Scene, *, t: float, frame_width: int, frame_height: int
 
     texts = [(i, o) for i, o in enumerate(scene.text_overlays) if _visible(o.start_seconds, o.end_seconds, t)]
     for index, overlay in [p for p in texts if not p[1].is_rotated] + [p for p in texts if p[1].is_rotated]:
-        font = text_render.load_font(_font_file(), overlay.font_size * scale)
+        font = text_render.load_font(overlay.font_file, overlay.font_size * scale)
         metrics = text_render.measure(overlay.text, font)
         x, y = _text_position(overlay, metrics, frame_width, frame_height)
         boxes.append(ElementBox(
@@ -442,7 +433,7 @@ def text_fractions_for_center(
     """The (x_fraction, y_fraction) that puts `overlay`'s center at
     (center_x, center_y) frame pixels - the inverse of the drawtext
     position rule `x = (w - text_w) * x_fraction`, clamped to 0-1."""
-    font = text_render.load_font(_font_file(), overlay.font_size * scale)
+    font = text_render.load_font(overlay.font_file, overlay.font_size * scale)
     metrics = text_render.measure(overlay.text, font)
 
     def solve(center: float, size: float, frame: float) -> float:

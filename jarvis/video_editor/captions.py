@@ -262,6 +262,8 @@ class CaptionStyle:
     shadow_color: str = "black@0.6"
     shadow_offset: int = 0
     background: bool = True
+    font: str = "arial_bold"
+    """A jarvis.video_editor.text_render.FONT_CHOICES key."""
     # outline_width=0/shadow_offset=0 are each independently "off" -
     # requirement: "šriftą, dydį, spalvą, kontūrą, šešėlį ir foną"
     # (font, size, color, outline, shadow and background) - `background`
@@ -269,6 +271,30 @@ class CaptionStyle:
     # already applies, kept as a real on/off switch rather than a new
     # mechanism (some styles want a clean outline/shadow look with no
     # box at all).
+
+
+CAPTION_STYLE_PRESETS: dict[str, dict] = {
+    "Klasikinis": {},
+    "Kontūras": {"outline_width": 4, "background": False},
+    "Geltonas": {"color": "#FFD700", "highlight_color": "white", "outline_width": 3, "background": False},
+    "TikTok": {"font": "impact", "outline_width": 5, "background": False, "highlight_color": "#FF3B6B"},
+    "Šešėlis": {"outline_width": 0, "shadow_offset": 4, "background": False},
+    "Elegantiškas": {"font": "georgia", "outline_width": 0, "shadow_offset": 3, "shadow_color": "black@0.5",
+                     "background": False},
+}
+# Subtitle looks (requirement: "subtitrų stiliai"). Each one starts from
+# the default look, so applying one never keeps leftovers of another;
+# size, position and animation stay the person's own.
+_CAPTION_LOOK_FIELDS = (
+    "font", "color", "highlight_color", "outline_color", "outline_width", "shadow_color", "shadow_offset", "background",
+)
+
+
+def apply_caption_preset(style: CaptionStyle, name: str) -> CaptionStyle:
+    baseline = CaptionStyle()
+    changes = {field: getattr(baseline, field) for field in _CAPTION_LOOK_FIELDS}
+    changes.update(CAPTION_STYLE_PRESETS[name])
+    return dataclasses.replace(style, **changes)
 
 
 def generate_word_timings(source_path: Path, *, language: str = DEFAULT_CAPTION_LANGUAGE) -> list[WordTiming]:
@@ -422,6 +448,14 @@ def _escape_drawtext_text(text: str) -> str:
     return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
+def caption_font_file(style: CaptionStyle) -> str:
+    """The font file `style` uses (the default font when its font isn't
+    installed)."""
+    from jarvis.video_editor.text_render import resolve_font_file
+
+    return resolve_font_file(style.font, _DEFAULT_FONT_FILE)
+
+
 def _style_suffix(style: CaptionStyle) -> str:
     """Builds the shared outline/shadow/background drawtext option
     suffix from `style` - factored out of build_caption_filter()/
@@ -500,7 +534,7 @@ def build_caption_filter(
     font_color = style.highlight_color if style.animation == "word_by_word" else style.color
     style_suffix = _style_suffix(style)
 
-    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    font_file_arg = _escape_drawtext_text(caption_font_file(style))
 
     clauses: list[str] = []
     if style.animation == "none":
@@ -588,15 +622,15 @@ def _build_karaoke_filter(
     CaptionAnimation's own docstring for why this needs TWO stacked
     drawtext clauses per word rather than a single color-expression
     clause."""
-    from PIL import ImageFont
+    from jarvis.video_editor.text_render import load_font
 
     if not word_groups:
         return f"[{video_label}]null[{output_label}]"
 
     y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
-    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    font_file_arg = _escape_drawtext_text(caption_font_file(style))
     style_suffix = _style_suffix(style)
-    font = ImageFont.truetype(_DEFAULT_FONT_FILE, style.font_size)
+    font = load_font(caption_font_file(style), style.font_size)
     space_width = font.getlength(" ")
 
     clauses: list[str] = []
@@ -654,7 +688,7 @@ def build_caption_filter_from_lines(
     style = scale_caption_style(style, scale)
 
     y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
-    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    font_file_arg = _escape_drawtext_text(caption_font_file(style))
     style_suffix = _style_suffix(style)
 
     clauses: list[str] = []

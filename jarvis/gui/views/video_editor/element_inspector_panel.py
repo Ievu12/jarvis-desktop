@@ -21,6 +21,8 @@ from jarvis.gui.views.video_editor.common import LabeledDropdown
 from jarvis.gui.widgets import Card
 from jarvis.video_editor.effects import LOOK_CHOICES, LOOK_LABELS
 from jarvis.video_editor.stickers import STICKER_ANIMATION_CHOICES, StickerInstance
+from jarvis.video_editor.text_render import FONT_CHOICES, FONT_LABELS, font_is_available
+from jarvis.video_editor.text_templates import TEXT_STYLE_PRESETS, apply_text_style
 from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TEXT_ANIMATION_CHOICES, TextOverlay
 from jarvis.video_editor.timeline import TRANSITION_KIND_CHOICES, TimelineClip, TimelineStill, TransitionSpec
 from jarvis.video_editor.track_layout import MIN_TRANSITION_SECONDS, TRANSITION_LABELS
@@ -226,21 +228,88 @@ class ElementInspectorPanel(ctk.CTkFrame):
             fg_color=theme.BG_CARD, hover_color=theme.DANGER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(side="left")
 
+    def _swatches(self, parent, field: str, colors: tuple[str, ...] = _SWATCHES) -> None:
+        for color in colors:
+            ctk.CTkButton(
+                parent, text="", width=18, height=18, fg_color=_swatch_hex(color), hover_color=_swatch_hex(color),
+                border_width=1, border_color=theme.BORDER_SUBTLE,
+                command=lambda c=color: self._edit(final=True, **{field: c}),
+            ).pack(side="left", padx=(0, 2))
+
+    def _style_presets(self) -> None:
+        self._label("Stilius")
+        grid = ctk.CTkFrame(self._body, fg_color="transparent")
+        grid.pack(fill="x")
+        for n, preset in enumerate(TEXT_STYLE_PRESETS):
+            ctk.CTkButton(
+                grid, text=preset.name, width=78, height=24,
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+                fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
+                border_color=theme.BORDER_SUBTLE,
+                command=lambda p=preset: self._apply_style_preset(p),
+            ).grid(row=n // 3, column=n % 3, padx=(0, 2), pady=(0, 2), sticky="w")
+
+    def _apply_style_preset(self, preset) -> None:
+        if isinstance(self._element, TextOverlay):
+            self._edit(final=True, **{
+                name: value for name, value in dataclasses.asdict(apply_text_style(self._element, preset)).items()
+                if getattr(self._element, name) != value
+            })
+
+    def _font_dropdown(self) -> None:
+        labels = tuple(FONT_LABELS[font] for font in FONT_CHOICES)
+        dropdown = LabeledDropdown(self._body, "Šriftas:", labels)
+        dropdown.pack(fill="x", pady=(theme.SPACE_SM, 0))
+        note = ctk.CTkLabel(
+            self._body, text="", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
+        )
+        note.pack(anchor="w")
+
+        def on_pick(label: str) -> None:
+            if not self._refreshing:
+                self._edit(final=True, font=FONT_CHOICES[labels.index(label)])
+
+        dropdown.dropdown.configure(command=on_pick)
+
+        def set_font(element) -> None:
+            dropdown.set(FONT_LABELS.get(element.font, labels[0]))
+            note.configure(text="" if font_is_available(element.font) else
+                           "Šio šrifto kompiuteryje nėra: naudojamas Arial Bold.")
+
+        set_font(self._element)
+        self._value_setters.append(set_font)
+
+    def _text_style_controls(self) -> None:
+        self._slider("Kontūras (px)", "outline_width", 0, 20, steps=20, fmt="{:d}", cast=lambda v: int(round(v)))
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(2, 0))
+        self._swatches(row, "outline_color")
+        self._slider("Šešėlis (px)", "shadow_offset", 0, 20, steps=20, fmt="{:d}", cast=lambda v: int(round(v)))
+        self._slider("Šešėlio ryškumas", "shadow_opacity", 0.0, 1.0, steps=20, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(2, 0))
+        self._swatches(row, "shadow_color")
+        self._slider("Fonas (permatomumas)", "background_opacity", 0.0, 1.0, steps=20, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(2, 0))
+        self._swatches(row, "background_color")
+
     def _build_text_controls(self, overlay: TextOverlay) -> None:
         self._label("Tekstas")
         self._entry(self._body, "text", width=240, parse=_non_empty, live=True).pack(fill="x")
+        self._style_presets()
+        self._font_dropdown()
         self._slider("Šrifto dydis", "font_size", 8, 300, steps=292, fmt="{:d}", cast=lambda v: int(round(v)))
 
         self._label("Spalva")
         color_row = ctk.CTkFrame(self._body, fg_color="transparent")
         color_row.pack(fill="x")
         self._entry(color_row, "color", width=90, parse=_non_empty).pack(side="left", padx=(0, theme.SPACE_XS))
-        for color in _SWATCHES:
-            ctk.CTkButton(
-                color_row, text="", width=18, height=18, fg_color=_swatch_hex(color), hover_color=_swatch_hex(color),
-                border_width=1, border_color=theme.BORDER_SUBTLE,
-                command=lambda c=color: self._edit(final=True, color=c),
-            ).pack(side="left", padx=(0, 2))
+        self._swatches(color_row, "color")
+        self._text_style_controls()
 
         rotation_slider = self._slider("Pasukimas (°)", "rotation_degrees", -180, 180, steps=360, fmt="{:.0f}")
         rotation_note = ctk.CTkLabel(

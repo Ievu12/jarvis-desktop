@@ -31,6 +31,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from jarvis.video_editor import text_render
+from jarvis.video_editor.text_render import DEFAULT_FONT, FONT_CHOICES
+
 _DEFAULT_FONT_FILE = "C:/Windows/Fonts/arialbd.ttf"
 # Same confirmed-working path captions.py's own _DEFAULT_FONT_FILE uses
 # - see that module's docstring for the real fontconfig crash this
@@ -151,6 +154,19 @@ class TextOverlay:
     rotation_degrees: float = 0.0
     """Clockwise, around the text's own center. Non-zero rotation is
     only supported with ROTATABLE_TEXT_ANIMATIONS (see that constant)."""
+    font: str = DEFAULT_FONT
+    """A text_render.FONT_CHOICES key."""
+    outline_width: int = 0
+    outline_color: str = "black"
+    shadow_offset: int = 0
+    shadow_color: str = "black"
+    shadow_opacity: float = 0.6
+    background_opacity: float = 0.0
+    """0 = no background box behind the text."""
+    background_color: str = "black"
+    # The style fields above are 1080p pixels like font_size (scaled
+    # per export resolution) and map one-to-one onto drawtext's own
+    # borderw / shadowx+shadowy / box options.
     # Only meaningful for "slide_in"/"slide_out" - which off-screen side
     # the text eases in from / out toward. Ignored by every other
     # animation kind, same "unused field for most, real field for one
@@ -179,6 +195,16 @@ class TextOverlay:
             problems.append("Text overlay intensity must be greater than zero.")
         if not (-360.0 <= self.rotation_degrees <= 360.0):
             problems.append(f"Text overlay rotation {self.rotation_degrees} must be between -360 and 360 degrees.")
+        if self.font not in FONT_CHOICES:
+            problems.append(f"Unknown font: {self.font!r}.")
+        if not (0 <= self.outline_width <= MAX_OUTLINE_WIDTH):
+            problems.append(f"Text outline width must be between 0 and {MAX_OUTLINE_WIDTH}.")
+        if not (-MAX_SHADOW_OFFSET <= self.shadow_offset <= MAX_SHADOW_OFFSET):
+            problems.append(f"Text shadow distance must be between -{MAX_SHADOW_OFFSET} and {MAX_SHADOW_OFFSET}.")
+        if not (0.0 <= self.shadow_opacity <= 1.0):
+            problems.append("Text shadow opacity must be between 0.0 and 1.0.")
+        if not (0.0 <= self.background_opacity <= 1.0):
+            problems.append("Text background opacity must be between 0.0 and 1.0.")
         if self.is_rotated and self.animation not in ROTATABLE_TEXT_ANIMATIONS:
             problems.append(
                 f"Rotated text supports only the {' / '.join(ROTATABLE_TEXT_ANIMATIONS)} animations "
@@ -189,6 +215,66 @@ class TextOverlay:
     @property
     def is_rotated(self) -> bool:
         return self.rotation_degrees % 360.0 != 0.0
+
+    @property
+    def font_file(self) -> str:
+        return text_render.resolve_font_file(self.font, _DEFAULT_FONT_FILE)
+
+    @property
+    def box_padding(self) -> int:
+        """Background box margin around the text, in the same pixels as
+        font_size (0 when there's no background)."""
+        return max(2, round(self.font_size * 0.2)) if self.background_opacity > 0 else 0
+
+
+MAX_OUTLINE_WIDTH = 30
+MAX_SHADOW_OFFSET = 40
+
+
+def _plain_color(color: str) -> str:
+    return (color or "black").split("@", 1)[0]
+
+
+def _px(value: float, scale: float) -> int:
+    """A style size in pixels at `scale`; a non-zero size stays at
+    least 1 px so an outline/shadow never vanishes at a low resolution."""
+    if value == 0:
+        return 0
+    scaled = round(value * scale)
+    return scaled if scaled != 0 else (1 if value > 0 else -1)
+
+
+def text_look(overlay: TextOverlay, scale: float = 1.0) -> text_render.TextLook:
+    """`overlay`'s outline/shadow/background as final pixels at
+    `scale` - the preview's counterpart of _style_suffix()."""
+    box_color = None
+    if overlay.background_opacity > 0:
+        r, g, b, _ = text_render.parse_color(_plain_color(overlay.background_color), default="black")
+        box_color = (r, g, b, round(255 * overlay.background_opacity))
+    sr, sg, sb, _ = text_render.parse_color(_plain_color(overlay.shadow_color), default="black")
+    return text_render.TextLook(
+        outline_width=_px(overlay.outline_width, scale),
+        outline_color=text_render.parse_color(overlay.outline_color, default="black"),
+        shadow_offset=_px(overlay.shadow_offset, scale) if overlay.shadow_opacity > 0 else 0,
+        shadow_color=(sr, sg, sb, round(255 * overlay.shadow_opacity)),
+        box_padding=round(overlay.box_padding * scale),
+        box_color=box_color,
+    )
+
+
+def _style_suffix(overlay: TextOverlay, *, outline: bool = True) -> str:
+    """drawtext options for `overlay`'s outline, shadow and background
+    (an already-scaled overlay - see _scaled())."""
+    parts = []
+    if outline and overlay.outline_width > 0:
+        parts.append(f"borderw={overlay.outline_width}:bordercolor={overlay.outline_color}")
+    if overlay.shadow_offset != 0 and overlay.shadow_opacity > 0:
+        shadow = f"{_plain_color(overlay.shadow_color)}@{overlay.shadow_opacity:.3f}"
+        parts.append(f"shadowx={overlay.shadow_offset}:shadowy={overlay.shadow_offset}:shadowcolor={shadow}")
+    if overlay.background_opacity > 0:
+        box = f"{_plain_color(overlay.background_color)}@{overlay.background_opacity:.3f}"
+        parts.append(f"box=1:boxcolor={box}:boxborderw={overlay.box_padding}")
+    return (":" + ":".join(parts)) if parts else ""
 
 
 def _escape_drawtext_text(text: str) -> str:
@@ -222,9 +308,9 @@ def build_text_overlay_filter(
     if not overlays:
         return f"[{video_label}]null[{output_label}]"
 
-    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
     clauses: list[str] = []
     for overlay in overlays:
+        font_file_arg = _escape_drawtext_text(overlay.font_file)
         if overlay.animation == "typewriter":
             clauses.append(_typewriter_clause(overlay, font_file_arg=font_file_arg))
         elif overlay.animation in ("pop_up", "pop_out", "zoom"):
@@ -247,9 +333,13 @@ def build_text_overlay_filter(
 
 
 def _scaled(overlay: TextOverlay, scale: float) -> TextOverlay:
+    """`overlay` with its pixel sizes (font, outline, shadow) at `scale`."""
     if scale == 1.0:
         return overlay
-    return dataclasses.replace(overlay, font_size=max(1, round(overlay.font_size * scale)))
+    return dataclasses.replace(
+        overlay, font_size=max(1, round(overlay.font_size * scale)),
+        outline_width=_px(overlay.outline_width, scale), shadow_offset=_px(overlay.shadow_offset, scale),
+    )
 
 
 def build_rotated_text_filters(
@@ -269,8 +359,6 @@ def build_rotated_text_filters(
     center would be. Returns (filters, final_video_label)."""
     from PIL import Image
 
-    from jarvis.video_editor import text_render
-
     for overlay in overlays:
         problems = overlay.validate()
         if problems:
@@ -280,9 +368,11 @@ def build_rotated_text_filters(
     current_label = video_label
     input_index = first_input_index
     for n, overlay in enumerate(o for o in overlays if o.is_rotated):
-        font = text_render.load_font(_DEFAULT_FONT_FILE, overlay.font_size * scale)
+        font = text_render.load_font(overlay.font_file, overlay.font_size * scale)
         fill = text_render.parse_color(overlay.color)
-        block, metrics = text_render.render_text_block(overlay.text, font=font, fill=fill)
+        block, metrics = text_render.render_text_block(
+            overlay.text, font=font, fill=fill, look=text_look(overlay, scale),
+        )
         rotated = block.rotate(-overlay.rotation_degrees, expand=True, resample=Image.Resampling.BICUBIC)
         image_path = cwd / f"_rotated_text_{n}.png"
         cwd.mkdir(parents=True, exist_ok=True)
@@ -330,7 +420,7 @@ def _plain_or_fade_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
         )
     return (
         f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize={overlay.font_size}:"
-        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}'{alpha_expr}:"
+        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}'{alpha_expr}{_style_suffix(overlay)}:"
         f"enable='between(t,{overlay.start_seconds},{overlay.end_seconds})'"
     )
 
@@ -363,7 +453,7 @@ def _typewriter_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
             break
         clauses.append(
             f"drawtext=fontfile='{font_file_arg}':text='{substring}':fontsize={overlay.font_size}:"
-            f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}':"
+            f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}'{_style_suffix(overlay)}:"
             f"enable='between(t,{reveal_time},{window_end})'"
         )
     if not clauses:
@@ -410,7 +500,7 @@ def _scaling_text_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
 
     return (
         f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize='{size_expr}':"
-        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}':enable='between(t,{start},{end})'"
+        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}'{_style_suffix(overlay)}:enable='between(t,{start},{end})'"
     )
 
 
@@ -430,7 +520,7 @@ def _bounce_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
     )
     return (
         f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize={overlay.font_size}:"
-        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}':enable='between(t,{start},{end})'"
+        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}'{_style_suffix(overlay)}:enable='between(t,{start},{end})'"
     )
 
 
@@ -473,7 +563,7 @@ def _sliding_text_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
 
     return (
         f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize={overlay.font_size}:"
-        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}':enable='between(t,{start},{end})'"
+        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}'{_style_suffix(overlay)}:enable='between(t,{start},{end})'"
     )
 
 
@@ -491,7 +581,7 @@ def _shake_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
     x_expr = f"(w-text_w)*{overlay.x_fraction}+{amplitude}*sin({frequency}*(t-{start}))"
     return (
         f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize={overlay.font_size}:"
-        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}':enable='between(t,{start},{end})'"
+        f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}'{_style_suffix(overlay)}:enable='between(t,{start},{end})'"
     )
 
 
@@ -514,10 +604,11 @@ def _glitch_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
     offset = 3 * overlay.intensity
 
     clauses = []
-    for color, extra_offset in (("red@0.6", -offset), ("cyan@0.6", offset), (overlay.color, 0)):
+    copies = (("red@0.6", -offset, ""), ("cyan@0.6", offset, ""), (overlay.color, 0, _style_suffix(overlay)))
+    for color, extra_offset, style in copies:  # the outline/shadow/box go on the real-color copy only
         clauses.append(
             f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize={overlay.font_size}:"
-            f"fontcolor={color}:x='({x_base})+({jitter_expr})+({extra_offset})':y='{y_expr}':"
+            f"fontcolor={color}:x='({x_base})+({jitter_expr})+({extra_offset})':y='{y_expr}'{style}:"
             f"enable='between(t,{start},{end})'"
         )
     return ",".join(clauses)
@@ -545,6 +636,6 @@ def _glow_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:
     return (
         f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize={overlay.font_size}:"
         f"fontcolor={overlay.color}:x='{x_expr}':y='{y_expr}':"
-        f"borderw={halo_width}:bordercolor={overlay.color}@0.5:"
+        f"borderw={halo_width}:bordercolor={_plain_color(overlay.color)}@0.5{_style_suffix(overlay, outline=False)}:"
         f"enable='between(t,{start},{end})'"
     )

@@ -161,13 +161,16 @@ class TextOverlayPanel(ctk.CTkFrame):
 
         def on_change(_event=None) -> None:
             try:
-                new_overlay = TextOverlay(
+                # replace(), not a new TextOverlay: the fields this row
+                # has no control for (rotation, font, outline, shadow,
+                # background...) are kept as they are.
+                new_overlay = dataclasses.replace(
+                    self._overlays[index],
                     text=text_entry.get(), start_seconds=float(start_entry.get()), end_seconds=float(end_entry.get()),
                     x_fraction=float(x_entry.get()), y_fraction=float(y_entry.get()),
                     font_size=int(size_entry.get()), color=color_entry.get().strip() or "white",
                     animation=anim_dropdown.get(), speed=float(speed_entry.get()), intensity=float(intensity_entry.get()),
-                    direction=direction_dropdown.get(), rotation_degrees=overlay.rotation_degrees,
-                    fade_seconds=overlay.fade_seconds,
+                    direction=direction_dropdown.get(),
                 )
             except ValueError:
                 return
