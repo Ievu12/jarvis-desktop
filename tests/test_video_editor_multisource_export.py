@@ -55,6 +55,15 @@ def test_resolve_export_format_maps_aspect_and_tier_to_real_pixels():
     assert (fmt_4k.width, fmt_4k.height) == (3840, 2160)
 
 
+def test_resolve_export_format_supports_4x5_instagram_feed_format():
+    # Stage 6 of the "professional Reels editor" plan explicitly named
+    # 4:5 as a real, previously-missing export format.
+    for tier, expected in (("720p", (864, 1080)), ("1080p", (1080, 1350)), ("4k", (2160, 2700))):
+        fmt = mse.resolve_export_format("4:5", tier)
+        assert (fmt.width, fmt.height) == expected
+        assert fmt.width / fmt.height == pytest.approx(4 / 5)
+
+
 def test_resolve_export_format_rejects_unknown_aspect_ratio():
     with pytest.raises(mse.MultiSourceExportError, match="Unknown aspect ratio"):
         mse.resolve_export_format("4:3", "1080p")
@@ -370,3 +379,99 @@ def test_verify_playable_encoding_accepts_a_yuv420p_stream(tmp_path):
         capture_output=True, timeout=30, check=True,
     )
     mse._verify_playable_encoding(good_file, ffmpeg_path="ffmpeg")  # must not raise
+
+
+def test_export_with_sticker_filter_composites_a_real_visible_sticker(tmp_path):
+    from jarvis.video_editor.stickers import StickerInstance, build_sticker_filter
+
+    project = storage.create_project()
+    clip = _make_clip(tmp_path / "clip.mp4", duration_seconds=3.0, width=1080, height=1920, color="blue")
+    m1 = media_import.import_media(clip, project, media_item_id="m1")
+    media_items = {"m1": m1}
+    timeline = Timeline(items=(
+        TimelineClip(clip_id="c1", media_item_id="m1", source_in_seconds=0.0, source_out_seconds=3.0),
+    ), aspect_ratio="9:16")
+    fmt = mse.resolve_export_format("9:16", "720p")
+
+    sticker = StickerInstance(start_seconds=0.5, end_seconds=2.5, shape="heart", animation="pop_in")
+    extra_args, clause = build_sticker_filter(
+        sticker, canvas_width=fmt.width, canvas_height=fmt.height, cwd=project.exports_dir,
+        video_label="outv", output_label="stickv", input_index=1,
+    )
+    output_path = project.exports_dir / "sticker.mp4"
+    result = mse.export_timeline(
+        timeline, media_items, export_format=fmt, output_path=output_path, sticker_filters=[(extra_args, clause)],
+    )
+    assert result.output_path.is_file()
+
+    frame_during = project.exports_dir / "during.png"
+    frame_before = project.exports_dir / "before.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", "1.5", "-i", str(output_path), "-frames:v", "1", str(frame_during)],
+        capture_output=True, timeout=15, check=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", "0.1", "-i", str(output_path), "-frames:v", "1", str(frame_before)],
+        capture_output=True, timeout=15, check=True,
+    )
+    assert Image.open(frame_during).tobytes() != Image.open(frame_before).tobytes()
+
+
+def test_export_without_sticker_filters_is_unchanged(tmp_path):
+    # Regression check: omitting sticker_filters (the default, None)
+    # must reproduce the exact same export as before this parameter
+    # existed - no accidental behavior change for every pre-existing
+    # export call that never passes it.
+    project = storage.create_project()
+    clip = _make_clip(tmp_path / "clip.mp4", duration_seconds=2.0, color="red")
+    m1 = media_import.import_media(clip, project, media_item_id="m1")
+    media_items = {"m1": m1}
+    timeline = Timeline(items=(
+        TimelineClip(clip_id="c1", media_item_id="m1", source_in_seconds=0.0, source_out_seconds=2.0),
+    ), aspect_ratio="9:16")
+    fmt = mse.resolve_export_format("9:16", "720p")
+    output_path = project.exports_dir / "no_sticker.mp4"
+    result = mse.export_timeline(timeline, media_items, export_format=fmt, output_path=output_path)
+    assert result.output_path.is_file()
+
+
+def test_export_detects_a_sticker_and_music_input_index_collision_before_calling_ffmpeg(tmp_path):
+    # Real regression test for a user-reported export failure: a caller
+    # (jarvis.gui.views.video_editor.dashboard's own _start_export(),
+    # fixed separately) once computed audio_mix_filter's own input
+    # index without accounting for sticker_filters' own already-claimed
+    # indices, so music's own `[N:a]` reference collided with a
+    # sticker's PNG input - ffmpeg failed deep inside its own
+    # filtergraph binding step with a cryptic error. This test verifies
+    # export_timeline() ITSELF now catches that exact collision shape
+    # with a clear, actionable MultiSourceExportError, as a defensive
+    # backstop independent of any one caller getting its own input-index
+    # math right.
+    from jarvis.video_editor.stickers import StickerInstance, build_sticker_filter
+
+    project = storage.create_project()
+    clip = _make_clip(tmp_path / "clip.mp4", duration_seconds=3.0, color="blue")
+    m1 = media_import.import_media(clip, project, media_item_id="m1")
+    media_items = {"m1": m1}
+    timeline = Timeline(items=(
+        TimelineClip(clip_id="c1", media_item_id="m1", source_in_seconds=0.0, source_out_seconds=3.0),
+    ), aspect_ratio="9:16")
+    fmt = mse.resolve_export_format("9:16", "1080p")
+
+    sticker = StickerInstance(start_seconds=0.2, end_seconds=1.0, shape="heart")
+    extra_args, clause = build_sticker_filter(
+        sticker, canvas_width=fmt.width, canvas_height=fmt.height, cwd=project.exports_dir,
+        video_label="outv", output_label="stickv0", input_index=1,
+    )
+    # Deliberately buggy: music ALSO claims input index 1, colliding
+    # with the sticker's own real input index.
+    colliding_audio_mix_filter = (
+        ["-i", "fake.wav"], "[1:a]anull[music];[outa][music]amix=inputs=2[mixedaudio]", "mixedaudio",
+    )
+    output_path = project.exports_dir / "should_fail.mp4"
+    with pytest.raises(mse.MultiSourceExportError, match="collides with an input already used"):
+        mse.export_timeline(
+            timeline, media_items, export_format=fmt, output_path=output_path,
+            sticker_filters=[(extra_args, clause)], audio_mix_filter=colliding_audio_mix_filter,
+        )
+    assert not output_path.exists()

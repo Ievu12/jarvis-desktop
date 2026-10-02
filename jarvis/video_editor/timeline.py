@@ -31,6 +31,7 @@ enough - no custom encoder needed)."""
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -39,8 +40,16 @@ from jarvis.video_editor.effects import EffectSpec
 TransitionKind = Literal["cut", "fade", "dissolve", "slide_left", "slide_right"]
 TRANSITION_KIND_CHOICES: tuple[TransitionKind, ...] = ("cut", "fade", "dissolve", "slide_left", "slide_right")
 
-AspectRatio = Literal["9:16", "1:1", "16:9"]
-ASPECT_RATIO_CHOICES: tuple[AspectRatio, ...] = ("9:16", "1:1", "16:9")
+AspectRatio = Literal["9:16", "1:1", "16:9", "4:5"]
+ASPECT_RATIO_CHOICES: tuple[AspectRatio, ...] = ("9:16", "1:1", "16:9", "4:5")
+# "4:5" (Instagram's own standard portrait FEED-post crop, distinct
+# from "9:16" Reels/Stories) added for Stage 6 of the "professional
+# Reels editor" plan - the user's own plan named 4:5 explicitly as a
+# previously-missing export format (jarvis.video_editor.multisource
+# _export.resolve_export_format() is the other half of this addition,
+# since THIS tuple alone only controls what TimelinePanel's own aspect
+# dropdown offers - the actual pixel dimensions per resolution tier
+# live in that sibling module's own _RESOLUTION_TIERS).
 
 _MIN_SPEED_FACTOR = 0.25
 _MAX_SPEED_FACTOR = 4.0
@@ -218,3 +227,17 @@ class Timeline:
                 problems.append("The last item cannot have a transition into a next clip that doesn't exist.")
 
         return problems
+
+
+def apply_effect_to_every_item(timeline: Timeline, effect: EffectSpec) -> Timeline:
+    """Returns a NEW Timeline with every item's own `effect` replaced
+    by `effect` - clip/still identity, order, in/out trim, speed, and
+    transitions are NEVER touched. The one real mechanism both
+    jarvis.video_editor.reel_templates.apply_template() (a curated
+    ReelTemplate's own default_effect) and
+    jarvis.video_editor.ai_assistant's own proposal-apply path (an
+    AI-suggested EffectSpec) build on, so a hand-picked template and an
+    AI suggestion are applied through the exact same code, never two
+    competing implementations of "replace every item's effect"."""
+    new_items = tuple(dataclasses.replace(item, effect=effect) for item in timeline.items)
+    return dataclasses.replace(timeline, items=new_items)

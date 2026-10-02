@@ -30,17 +30,25 @@ _FILETYPES = (
 class MusicPanel(ctk.CTkFrame):
     def __init__(
         self, master, *, on_file_chosen: Callable[[Path], None], on_track_changed: Callable[[MusicTrack | None], None],
-        **kwargs,
+        on_analyze_rhythm_requested: Callable[[Path], None] | None = None, **kwargs,
     ) -> None:
         """`on_file_chosen(path)` fires when a new music file is picked
         (the owning dashboard imports it into the project's own storage
         and calls back with the real project-local MusicTrack via
         set_imported_track() below). `on_track_changed(track_or_None)`
         fires whenever any control changes with an already-imported
-        track, or None if the person removes the track entirely."""
+        track, or None if the person removes the track entirely.
+
+        `on_analyze_rhythm_requested(track_path)`, if given, fires when
+        the "🎵 Analyze Rhythm" button is clicked - a real, possibly-
+        slow audio analysis (jarvis.video_editor.audio_sync
+        .analyze_amplitude_peaks()), so this panel never runs it
+        directly; the owning dashboard runs it in the background and
+        calls show_rhythm_peaks()/show_rhythm_error() below once done."""
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_file_chosen = on_file_chosen
         self._on_track_changed = on_track_changed
+        self._on_analyze_rhythm_requested = on_analyze_rhythm_requested
         self._track_path: Path | None = None
 
         card = Card(self)
@@ -131,12 +139,70 @@ class MusicPanel(ctk.CTkFrame):
             entry.bind("<FocusOut>", on_change)
             entry.bind("<Return>", on_change)
 
+        buttons_row = ctk.CTkFrame(self._controls_container, fg_color="transparent")
+        buttons_row.pack(anchor="w", pady=(theme.SPACE_XS, 0))
         ctk.CTkButton(
-            self._controls_container, text="🗑 Remove Music", command=self._on_remove_clicked, width=130, height=24,
+            buttons_row, text="🗑 Remove Music", command=self._on_remove_clicked, width=130, height=24,
             fg_color=theme.BG_CARD, hover_color=theme.DANGER, border_width=1, border_color=theme.BORDER_SUBTLE,
-        ).pack(anchor="w", pady=(theme.SPACE_XS, 0))
+        ).pack(side="left", padx=(0, theme.SPACE_SM))
+        if self._on_analyze_rhythm_requested is not None:
+            ctk.CTkButton(
+                buttons_row, text="🎵 Analyze Rhythm (approximate)", height=24,
+                command=lambda: self._on_analyze_rhythm_requested(track_path),
+            ).pack(side="left")
+
+        self._rhythm_status = status_label(self._controls_container, "", kind="muted")
+        self._rhythm_container = ctk.CTkFrame(self._controls_container, fg_color="transparent")
 
         on_change()
+
+    def set_analyzing_state(self, *, analyzing: bool) -> None:
+        if analyzing:
+            self._rhythm_status.configure(text="Analyzing audio for loud moments...", text_color=theme.ACCENT_PRIMARY)
+            self._rhythm_status.pack(anchor="w", pady=(theme.SPACE_SM, 0))
+        else:
+            self._rhythm_status.pack_forget()
+
+    def show_rhythm_error(self, message: str) -> None:
+        self._rhythm_status.configure(text=f"⚠️ {message}", text_color=theme.DANGER)
+        self._rhythm_status.pack(anchor="w", pady=(theme.SPACE_SM, 0))
+
+    def show_rhythm_peaks(self, peaks) -> None:
+        """Renders the real, measured amplitude peaks as a plain,
+        read-only timestamp list - requirement: "galimybė rankiniu būdu
+        koreguoti automatiškai parinktus efektų pradžios momentus"
+        (ability to manually adjust automatically-suggested effect start
+        times). Deliberately NOT a one-click "apply to this sticker/
+        text" button - the person copies whichever timestamp they want
+        into any sticker's/text overlay's own Start field themselves,
+        keeping every placement an explicit, reviewed choice rather than
+        a silent automatic move (see jarvis.video_editor.audio_sync's
+        own honest-disclosure docstring: these are loud-moment
+        SUGGESTIONS, never auto-applied)."""
+        self._rhythm_status.pack_forget()
+        for child in self._rhythm_container.winfo_children():
+            child.destroy()
+        self._rhythm_container.pack(fill="x", pady=(theme.SPACE_SM, 0))
+
+        if not peaks:
+            status_label(
+                self._rhythm_container, "No clear loud moments detected in this track.", kind="muted",
+            ).pack(anchor="w")
+            return
+
+        status_label(
+            self._rhythm_container,
+            "Approximate loud moments (not real BPM/beat detection) - copy a timestamp into any "
+            "sticker's or text overlay's own Start field:",
+            kind="muted",
+        ).pack(anchor="w", pady=(0, theme.SPACE_XS))
+        for peak in peaks:
+            ctk.CTkLabel(
+                self._rhythm_container,
+                text=f"  {peak.timestamp_seconds:.2f}s  (strength {peak.relative_strength:.0%})",
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+                text_color=theme.TEXT_SECONDARY, anchor="w",
+            ).pack(anchor="w")
 
     def _on_remove_clicked(self) -> None:
         self._track_path = None

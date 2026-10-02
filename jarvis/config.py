@@ -314,3 +314,12 @@ VIDEO_STUDIO_PROJECTS_DIR/REEL_GENERATOR_PROJECTS_DIR - see either
 constant's own docstring for the full reasoning. Lives under
 JARVIS_DATA_DIR (not JARVIS_ROOT) for the same survives-an-update
 reason."""
+
+VIDEO_EDITOR_STICKER_LIBRARY_FILE: Path = JARVIS_DATA_DIR / ".jarvis" / "video_editor_sticker_library.json"
+"""A small JSON file holding the person's own sticker favorites and
+saved collections (jarvis.video_editor.sticker_library) - deliberately
+GLOBAL, not per-project (a favorited sticker/a saved collection is
+useful across every Video Editor project, not scoped to one), so this
+lives as its own standalone file rather than a row in
+VIDEO_EDITOR_DB_FILE's own per-project table. Contains no credential;
+created idempotently with an empty default shape on first use."""

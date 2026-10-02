@@ -40,7 +40,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from jarvis.video_studio.transcribe import LANGUAGE_AUTO, model_is_downloaded, model_path
+from jarvis.video_studio.transcribe import LANGUAGE_AUTO, LANGUAGE_LITHUANIAN, model_is_downloaded, model_path
+
+# Real, hand-hit bug this fixes: generate_word_timings() ALWAYS used to
+# be called without a `language=` argument (its own default,
+# LANGUAGE_AUTO, was the only value ever reached from the GUI), so
+# whisper's own language AUTO-DETECTION ran on every transcription -
+# confirmed, via a real test, that this model can and does misdetect
+# real speech's own language (forcing a WRONG language onto a real
+# recording measurably changes the transcribed text, proving the
+# mechanism is sensitive to exactly this kind of misdetection). A
+# person-selectable language, defaulting to Lithuanian (not "auto"), is
+# the real fix - these are whisper.cpp's own real ISO 639-1 language
+# codes (confirmed via `ffmpeg -h filter=whisper`), not an invented
+# list; "auto" stays available as an explicit opt-in choice, never the
+# default.
+CAPTION_LANGUAGE_CHOICES: tuple[str, ...] = (
+    LANGUAGE_LITHUANIAN, "en", "ru", "pl", "de", "fr", "es", "it", LANGUAGE_AUTO,
+)
+CAPTION_LANGUAGE_LABELS: dict[str, str] = {
+    "lt": "Lietuvių", "en": "English", "ru": "Русский", "pl": "Polski",
+    "de": "Deutsch", "fr": "Français", "es": "Español", "it": "Italiano", "auto": "Auto-detect",
+}
+DEFAULT_CAPTION_LANGUAGE = LANGUAGE_LITHUANIAN
 
 _TRANSCRIBE_TIMEOUT_SECONDS = 900
 # Same generous bound jarvis.video_studio.transcribe.transcribe_video()
@@ -53,13 +75,40 @@ _TRANSCRIBE_TIMEOUT_SECONDS = 900
 CaptionPosition = Literal["top", "center", "bottom"]
 CAPTION_POSITION_CHOICES: tuple[CaptionPosition, ...] = ("top", "center", "bottom")
 
-CaptionAnimation = Literal["word_by_word", "none"]
-CAPTION_ANIMATION_CHOICES: tuple[CaptionAnimation, ...] = ("word_by_word", "none")
+CaptionAnimation = Literal["word_by_word", "none", "karaoke", "pop", "slide"]
+CAPTION_ANIMATION_CHOICES: tuple[CaptionAnimation, ...] = ("word_by_word", "karaoke", "pop", "slide", "none")
 # "none" burns in the FULL transcript text for its own whole segment's
 # duration (no per-word reveal) - the simpler, non-animated fallback
 # requirement 3 also asks for ("multiple animation style presets"),
 # built on the exact same WordTiming data (grouped back into segments)
 # rather than a second, separate transcription pass.
+#
+# "karaoke" (new): the WHOLE line stays visible for its own full
+# duration, with only the currently-spoken word's own color switching
+# to `style.highlight_color` during its own real speaking window -
+# genuinely different from "word_by_word" (which shows ONE word at a
+# time, hiding the rest of the line). Requirement: "paryškinti aktyvų
+# žodį kita spalva" (highlight the active word in a different color)
+# while the surrounding sentence stays readable - a real, hand-hit
+# finding while building this: ffmpeg drawtext's own `fontcolor_expr`
+# does NOT accept a conditional/boolean expression the way `enable=`
+# does (confirmed by hand: passing an `if(...)` expression as
+# fontcolor_expr fails with "Cannot find color" - that option expects a
+# literal color-expression format this codebase never needed to learn
+# further, not a general boolean expression language). The real,
+# reliable mechanism instead: each word gets rendered as exactly TWO
+# drawtext clauses at the SAME fixed (pre-measured) position - one in
+# `style.color` always visible for the whole line's duration, one in
+# `style.highlight_color` with `enable='between(t,word_start,word_end)'`
+# layered on top only during that word's own window - the same
+# proven `enable=` mechanism every other caption animation here already
+# uses, just applied twice per word instead of once.
+#
+# "pop"/"slide" (new): the same one-word-at-a-time reveal as
+# "word_by_word", but each word's own position/size varies over its own
+# short reveal window (a quick zoom/slide-in) rather than appearing at
+# a fixed position instantly - see _pop_word_clause()/_slide_word_clause()
+# below.
 
 DEFAULT_CAPTION_FONT_SIZE = 64
 DEFAULT_CAPTION_COLOR = "white"
@@ -160,25 +209,35 @@ def group_words_into_lines(words: list[WordTiming]) -> list[CaptionLine]:
     and the next word's own start time is at least _LINE_GAP_SECONDS
     (a real pause in speech), never an arbitrary fixed word count.
     Returns [] for an empty `words` list (never raises)."""
+    return [
+        CaptionLine(
+            text=" ".join(w.text for w in group),
+            start_seconds=group[0].start_seconds, end_seconds=group[-1].end_seconds,
+        )
+        for group in _group_words_by_gap(words)
+    ]
+
+
+def _group_words_by_gap(words: list[WordTiming]) -> list[list[WordTiming]]:
+    """The actual grouping logic group_words_into_lines() builds
+    CaptionLine objects from - factored out separately so
+    _build_karaoke_filter() below can group the SAME way while keeping
+    each line's own individual WordTiming objects (needed for its own
+    per-word highlight timing), which the text-only CaptionLine itself
+    never carries."""
     if not words:
         return []
-    lines: list[CaptionLine] = []
+    groups: list[list[WordTiming]] = []
     current: list[WordTiming] = [words[0]]
     for word in words[1:]:
         gap = word.start_seconds - current[-1].end_seconds
         if gap >= _LINE_GAP_SECONDS:
-            lines.append(CaptionLine(
-                text=" ".join(w.text for w in current),
-                start_seconds=current[0].start_seconds, end_seconds=current[-1].end_seconds,
-            ))
+            groups.append(current)
             current = [word]
         else:
             current.append(word)
-    lines.append(CaptionLine(
-        text=" ".join(w.text for w in current),
-        start_seconds=current[0].start_seconds, end_seconds=current[-1].end_seconds,
-    ))
-    return lines
+    groups.append(current)
+    return groups
 
 
 @dataclass(frozen=True)
@@ -196,18 +255,33 @@ class CaptionStyle:
     highlight_color: str = DEFAULT_CAPTION_HIGHLIGHT_COLOR
     position: CaptionPosition = "bottom"
     animation: CaptionAnimation = "word_by_word"
+    outline_color: str = "black"
+    outline_width: int = 2
+    shadow_color: str = "black@0.6"
+    shadow_offset: int = 0
+    background: bool = True
+    # outline_width=0/shadow_offset=0 are each independently "off" -
+    # requirement: "šriftą, dydį, spalvą, kontūrą, šešėlį ir foną"
+    # (font, size, color, outline, shadow and background) - `background`
+    # toggles the existing box=1/boxcolor behavior build_caption_filter()
+    # already applies, kept as a real on/off switch rather than a new
+    # mechanism (some styles want a clean outline/shadow look with no
+    # box at all).
 
 
-def generate_word_timings(source_path: Path, *, language: str = LANGUAGE_AUTO) -> list[WordTiming]:
+def generate_word_timings(source_path: Path, *, language: str = DEFAULT_CAPTION_LANGUAGE) -> list[WordTiming]:
     """Transcribes `source_path`'s speech into real, word-level timed
     segments via ffmpeg's own built-in `whisper` audio filter, the SAME
     whisper.cpp engine/model jarvis.video_studio.transcribe
-    .transcribe_video() already uses (same model file, same
-    LANGUAGE_LITHUANIAN="lt"/LANGUAGE_AUTO support) - requesting
-    `format=json:max_len=1` instead of that function's own
-    `format=srt` to get one JSON object per WORD instead of per
-    sentence. This is a separate, sibling ffmpeg invocation (not a call
-    into transcribe_video() itself) because that function's own
+    .transcribe_video() already uses (same model file, same real
+    ISO 639-1 language codes - see CAPTION_LANGUAGE_CHOICES's own
+    docstring above for the real bug this default change fixes:
+    defaulting to "auto" let whisper's own language auto-detection
+    silently misidentify real speech, with no way for a person to
+    override it) - requesting `format=json:max_len=1` instead of that
+    function's own `format=srt` to get one JSON object per WORD instead
+    of per sentence. This is a separate, sibling ffmpeg invocation (not
+    a call into transcribe_video() itself) because that function's own
     contract is fixed at SRT/segment granularity - duplicating its
     small amount of subprocess-invocation logic here (the same cwd-
     relative-model-path workaround, documented below) was judged
@@ -346,6 +420,25 @@ def _escape_drawtext_text(text: str) -> str:
     return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
+def _style_suffix(style: CaptionStyle) -> str:
+    """Builds the shared outline/shadow/background drawtext option
+    suffix from `style` - factored out of build_caption_filter()/
+    build_caption_filter_from_lines()/the new karaoke/pop/slide builders
+    below so every caption rendering path honors the SAME font/outline/
+    shadow/background choices (requirement: "galimybė pasirinkti šriftą,
+    dydį, spalvą, kontūrą, šešėlį ir foną" - font/size/color/outline/
+    shadow/background selection), rather than duplicating this logic
+    per animation kind."""
+    parts = []
+    if style.outline_width > 0:
+        parts.append(f"borderw={style.outline_width}:bordercolor={style.outline_color}")
+    if style.shadow_offset != 0:
+        parts.append(f"shadowx={style.shadow_offset}:shadowy={style.shadow_offset}:shadowcolor={style.shadow_color}")
+    if style.background:
+        parts.append("box=1:boxcolor=black@0.5:boxborderw=10")
+    return (":" + ":".join(parts)) if parts else ""
+
+
 def build_caption_filter(
     words: list[WordTiming], style: CaptionStyle, *, time_offset_seconds: float = 0.0,
     video_label: str = "outv", output_label: str = "capv",
@@ -381,8 +474,16 @@ def build_caption_filter(
     if not words:
         return f"[{video_label}]null[{output_label}]"
 
+    if style.animation == "karaoke":
+        word_groups = _group_words_by_gap(words)
+        return _build_karaoke_filter(
+            word_groups, style, time_offset_seconds=time_offset_seconds,
+            video_label=video_label, output_label=output_label,
+        )
+
     y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
     font_color = style.highlight_color if style.animation == "word_by_word" else style.color
+    style_suffix = _style_suffix(style)
 
     font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
 
@@ -393,9 +494,18 @@ def build_caption_filter(
         end = words[-1].end_seconds + time_offset_seconds
         clauses.append(
             f"drawtext=fontfile='{font_file_arg}':text='{combined_text}':fontsize={style.font_size}:fontcolor={style.color}:"
-            f"x=(w-text_w)/2:y={y_expr}:box=1:boxcolor=black@0.5:boxborderw=10:"
+            f"x=(w-text_w)/2:y={y_expr}{style_suffix}:"
             f"enable='between(t,{start},{end})'"
         )
+    elif style.animation in ("pop", "slide"):
+        for word in words:
+            start = word.start_seconds + time_offset_seconds
+            end = word.end_seconds + time_offset_seconds
+            escaped = _escape_drawtext_text(word.text)
+            clauses.append(_animated_word_clause(
+                escaped, start=start, end=end, style=style, font_file_arg=font_file_arg,
+                font_color=font_color, y_expr=y_expr, style_suffix=style_suffix,
+            ))
     else:
         for word in words:
             start = word.start_seconds + time_offset_seconds
@@ -403,9 +513,99 @@ def build_caption_filter(
             escaped = _escape_drawtext_text(word.text)
             clauses.append(
                 f"drawtext=fontfile='{font_file_arg}':text='{escaped}':fontsize={style.font_size}:fontcolor={font_color}:"
-                f"x=(w-text_w)/2:y={y_expr}:box=1:boxcolor=black@0.5:boxborderw=10:"
+                f"x=(w-text_w)/2:y={y_expr}{style_suffix}:"
                 f"enable='between(t,{start},{end})'"
             )
+
+    chain = ",".join(clauses)
+    return f"[{video_label}]{chain}[{output_label}]"
+
+
+_POP_DURATION_SECONDS = 0.15
+_SLIDE_DURATION_SECONDS = 0.2
+
+
+def _animated_word_clause(
+    escaped_text: str, *, start: float, end: float, style: CaptionStyle, font_file_arg: str,
+    font_color: str, y_expr: str, style_suffix: str,
+) -> str:
+    """Builds one word's own drawtext clause for the "pop"/"slide"
+    animation kinds - a quick reveal transition over the word's own
+    first _POP_DURATION_SECONDS/_SLIDE_DURATION_SECONDS, landing at the
+    same fixed centered position every other word-by-word animation
+    already uses. "pop": fontsize ramps up from half-size to full size
+    (a real, measurable zoom-in, not a fade). "slide": the word's own y
+    position eases in from below its final resting position."""
+    if style.animation == "pop":
+        size_expr = (
+            f"if(lt(t,{start}+{_POP_DURATION_SECONDS}),"
+            f"{style.font_size}*(0.5+0.5*(t-{start})/{_POP_DURATION_SECONDS}),{style.font_size})"
+        )
+        return (
+            f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize='{size_expr}':fontcolor={font_color}:"
+            f"x=(w-text_w)/2:y={y_expr}{style_suffix}:enable='between(t,{start},{end})'"
+        )
+    # "slide"
+    y_offset_expr = (
+        f"if(lt(t,{start}+{_SLIDE_DURATION_SECONDS}),"
+        f"30*(1-(t-{start})/{_SLIDE_DURATION_SECONDS}),0)"
+    )
+    return (
+        f"drawtext=fontfile='{font_file_arg}':text='{escaped_text}':fontsize={style.font_size}:fontcolor={font_color}:"
+        f"x=(w-text_w)/2:y='({y_expr})+({y_offset_expr})'{style_suffix}:enable='between(t,{start},{end})'"
+    )
+
+
+def _build_karaoke_filter(
+    word_groups: list[list[WordTiming]], style: CaptionStyle, *, time_offset_seconds: float,
+    video_label: str, output_label: str,
+) -> str:
+    """Builds the "karaoke" animation: each line (one `words` group from
+    `word_groups`, the real sentence/phrase grouping
+    _group_words_by_gap() already produces for group_words_into_lines()'s
+    own CaptionLine output) stays fully visible for its own whole
+    duration, with its own words positioned side-by-side on one row
+    (pre-measured via Pillow's own ImageFont, the same measurement
+    library jarvis.design_studio.render/.reel_generator.scene_render
+    already use for drawn text elsewhere in this codebase) and the
+    currently-spoken word's own color switching to
+    `style.highlight_color` during its own real measured window - see
+    CaptionAnimation's own docstring for why this needs TWO stacked
+    drawtext clauses per word rather than a single color-expression
+    clause."""
+    from PIL import ImageFont
+
+    if not word_groups:
+        return f"[{video_label}]null[{output_label}]"
+
+    y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
+    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    style_suffix = _style_suffix(style)
+    font = ImageFont.truetype(_DEFAULT_FONT_FILE, style.font_size)
+    space_width = font.getlength(" ")
+
+    clauses: list[str] = []
+    for words in word_groups:
+        widths = [font.getlength(w.text) for w in words]
+        total_width = sum(widths) + space_width * max(0, len(words) - 1)
+        cursor_offset = -total_width / 2
+        line_start = words[0].start_seconds + time_offset_seconds
+        line_end = words[-1].end_seconds + time_offset_seconds
+
+        for word, width in zip(words, widths):
+            escaped = _escape_drawtext_text(word.text)
+            x_expr = f"(w/2)+({cursor_offset})"
+            clauses.append(
+                f"drawtext=fontfile='{font_file_arg}':text='{escaped}':fontsize={style.font_size}:fontcolor={style.color}:"
+                f"x='{x_expr}':y={y_expr}{style_suffix}:enable='between(t,{line_start},{line_end})'"
+            )
+            word_start = word.start_seconds + time_offset_seconds
+            word_end = word.end_seconds + time_offset_seconds
+            clauses.append(
+                f"drawtext=fontfile='{font_file_arg}':text='{escaped}':fontsize={style.font_size}:fontcolor={style.highlight_color}:"
+                f"x='{x_expr}':y={y_expr}:enable='between(t,{word_start},{word_end})'"
+            )
+            cursor_offset += width + space_width
 
     chain = ",".join(clauses)
     return f"[{video_label}]{chain}[{output_label}]"
@@ -439,6 +639,7 @@ def build_caption_filter_from_lines(
 
     y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
     font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    style_suffix = _style_suffix(style)
 
     clauses: list[str] = []
     for line in lines:
@@ -447,9 +648,44 @@ def build_caption_filter_from_lines(
         escaped = _escape_drawtext_text(line.text)
         clauses.append(
             f"drawtext=fontfile='{font_file_arg}':text='{escaped}':fontsize={style.font_size}:fontcolor={style.color}:"
-            f"x=(w-text_w)/2:y={y_expr}:box=1:boxcolor=black@0.5:boxborderw=10:"
+            f"x=(w-text_w)/2:y={y_expr}{style_suffix}:"
             f"enable='between(t,{start},{end})'"
         )
 
     chain = ",".join(clauses)
     return f"[{video_label}]{chain}[{output_label}]"
+
+
+def export_srt(lines: list[CaptionLine], destination: Path) -> None:
+    """Writes `lines` (the same real, person-reviewed/edited
+    CaptionLines build_caption_filter_from_lines() burns into the
+    export) as a standard .srt subtitle file - requirement: "Leisk
+    eksportuoti subtitrus SRT formatu" (allow exporting subtitles in SRT
+    format). Same simple SRT writer shape as jarvis.video_studio.export
+    ._write_srt()/jarvis.reel_generator.export._write_srt() (index,
+    `start --> end` timestamp line, text, blank line), applied to this
+    package's own CaptionLine instead of those modules' own PlannedClip/
+    Scene types - written as real UTF-8 so Lithuanian diacritics
+    (ą č ę ė į š ų ū ž) round-trip correctly through any real SRT
+    reader, matching this module's own already-verified real whisper
+    UTF-8 output (see generate_word_timings()'s own docstring)."""
+    srt_lines: list[str] = []
+    for i, line in enumerate(lines, start=1):
+        srt_lines.append(str(i))
+        srt_lines.append(f"{_srt_timestamp(line.start_seconds)} --> {_srt_timestamp(line.end_seconds)}")
+        srt_lines.append(line.text)
+        srt_lines.append("")
+    destination.write_text("\n".join(srt_lines), encoding="utf-8")
+
+
+def _srt_timestamp(seconds: float) -> str:
+    """Identical format to jarvis.video_studio.export._srt_timestamp()/
+    jarvis.reel_generator.export._srt_timestamp() (duplicated, not
+    imported - see this module's own established per-module isolation
+    convention, e.g. _escape_drawtext_text()'s own docstring for the
+    same reasoning applied to a different small helper)."""
+    total_ms = max(0, int(round(seconds * 1000)))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    secs, ms = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"

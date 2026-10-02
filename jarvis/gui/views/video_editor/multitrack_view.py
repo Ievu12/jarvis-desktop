@@ -25,6 +25,7 @@ _TRACK_HEIGHT = 28
 _TRACK_GAP = 4
 _CANVAS_WIDTH = 760
 _LEFT_LABEL_WIDTH = 70
+_TRACK_COUNT = 5
 
 
 class MultiTrackView(ctk.CTkFrame):
@@ -43,7 +44,7 @@ class MultiTrackView(ctk.CTkFrame):
         ).pack(anchor="w", pady=(0, theme.SPACE_SM))
 
         self._canvas = ctk.CTkCanvas(
-            inner, width=_CANVAS_WIDTH, height=_TRACK_HEIGHT * 4 + _TRACK_GAP * 5 + 20,
+            inner, width=_CANVAS_WIDTH, height=_TRACK_HEIGHT * _TRACK_COUNT + _TRACK_GAP * (_TRACK_COUNT + 1) + 20,
             bg=theme.BG_CARD, highlightthickness=0,
         )
         self._canvas.pack(fill="x")
@@ -51,7 +52,7 @@ class MultiTrackView(ctk.CTkFrame):
     def render(
         self, *, video_segments: list[tuple[float, float, str]], music_segment: tuple[float, float] | None,
         caption_segments: list[tuple[float, float]], text_segments: list[tuple[float, float]],
-        total_duration_seconds: float,
+        sticker_segments: list[tuple[float, float]], total_duration_seconds: float,
     ) -> None:
         """Redraws every track - each `*_segments` argument is a list of
         (start_seconds, end_seconds[, label]) tuples already computed by
@@ -71,6 +72,7 @@ class MultiTrackView(ctk.CTkFrame):
             ("🎵 Music", [(s, e, "") for s, e in ([music_segment] if music_segment else [])], "#2d8a5f"),
             ("💬 Captions", [(s, e, "") for s, e in caption_segments], "#b38600"),
             ("🔤 Text", [(s, e, "") for s, e in text_segments], "#8a4fb3"),
+            ("✨ Stickers", [(s, e, "") for s, e in sticker_segments], "#d1538a"),
         ]
 
         for row, (label, segments, color) in enumerate(tracks):

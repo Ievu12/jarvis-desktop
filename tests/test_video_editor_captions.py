@@ -116,7 +116,7 @@ def test_caption_style_defaults():
 
 def test_caption_position_and_animation_choices():
     assert CAPTION_POSITION_CHOICES == ("top", "center", "bottom")
-    assert CAPTION_ANIMATION_CHOICES == ("word_by_word", "none")
+    assert CAPTION_ANIMATION_CHOICES == ("word_by_word", "karaoke", "pop", "slide", "none")
 
 
 def test_build_caption_filter_empty_words_is_a_passthrough():
@@ -342,3 +342,205 @@ def test_real_export_with_edited_caption_line_is_visually_correct(tmp_path):
         capture_output=True, timeout=15, check=True,
     )
     assert Image.open(frame_plain).tobytes() != Image.open(frame_captioned).tobytes()
+
+
+# --- karaoke / pop / slide animations, and outline/shadow/background style options ------------
+
+
+def test_caption_style_outline_shadow_background_defaults():
+    style = CaptionStyle()
+    assert style.outline_color == "black"
+    assert style.outline_width == 2
+    assert style.shadow_color == "black@0.6"
+    assert style.shadow_offset == 0
+    assert style.background is True
+
+
+def test_build_caption_filter_karaoke_shows_whole_line_with_highlight_switching():
+    words = [
+        WordTiming(start_seconds=0.0, end_seconds=0.3, text="Hello"),
+        WordTiming(start_seconds=0.35, end_seconds=0.6, text="world"),
+    ]
+    style = CaptionStyle(animation="karaoke")
+    clause = build_caption_filter(words, style)
+    # Two drawtext clauses PER WORD (base + highlight overlay).
+    assert clause.count("drawtext=") == 4
+    assert "fontcolor=white" in clause
+    assert "fontcolor=yellow" in clause
+    assert "enable='between(t,0.0,0.6)'" in clause  # base clause spans the WHOLE line
+    assert "enable='between(t,0.35,0.6)'" in clause  # highlight clause spans just that word
+
+
+def test_build_caption_filter_karaoke_splits_on_a_real_pause():
+    words = [
+        WordTiming(start_seconds=0.0, end_seconds=0.3, text="First"),
+        WordTiming(start_seconds=2.0, end_seconds=2.3, text="Second"),
+    ]
+    style = CaptionStyle(animation="karaoke")
+    clause = build_caption_filter(words, style)
+    # Two separate lines (pause >= 0.6s) -> 4 words-worth of clauses total (2 per line).
+    assert clause.count("drawtext=") == 4
+
+
+def test_build_caption_filter_karaoke_empty_words_is_a_passthrough():
+    clause = build_caption_filter([], CaptionStyle(animation="karaoke"))
+    assert clause == "[outv]null[capv]"
+
+
+def test_build_caption_filter_pop_has_a_time_varying_fontsize():
+    words = [WordTiming(start_seconds=0.1, end_seconds=0.5, text="Hi")]
+    clause = build_caption_filter(words, CaptionStyle(animation="pop"))
+    assert "fontsize='if(lt(t," in clause
+
+
+def test_build_caption_filter_slide_has_a_quoted_time_varying_y_expression():
+    # Real regression test for a hand-hit bug: the slide animation's own
+    # y= expression was NOT wrapped in quotes, so ffmpeg's filtergraph
+    # parser split on the unquoted parentheses/commas inside it and
+    # failed with "No option name near..." - confirmed by a real export
+    # attempt before this fix. The y= value must be a single quoted
+    # token, same convention fontsize/x already use when they carry a
+    # full expression rather than a simple constant.
+    words = [WordTiming(start_seconds=0.1, end_seconds=0.5, text="Hi")]
+    clause = build_caption_filter(words, CaptionStyle(animation="slide"))
+    assert "y='(h*0.8)+(if(lt(t," in clause
+
+
+def test_build_caption_filter_applies_outline_and_shadow_when_set():
+    words = [WordTiming(start_seconds=0.0, end_seconds=1.0, text="Hi")]
+    style = CaptionStyle(animation="none", outline_width=3, outline_color="red", shadow_offset=4, shadow_color="gray")
+    clause = build_caption_filter(words, style)
+    assert "borderw=3:bordercolor=red" in clause
+    assert "shadowx=4:shadowy=4:shadowcolor=gray" in clause
+
+
+def test_build_caption_filter_omits_background_when_disabled():
+    words = [WordTiming(start_seconds=0.0, end_seconds=1.0, text="Hi")]
+    style = CaptionStyle(animation="none", background=False)
+    clause = build_caption_filter(words, style)
+    assert "box=1" not in clause
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+@pytest.mark.parametrize("animation", ["karaoke", "pop", "slide"])
+def test_real_export_with_new_animation_kinds_succeeds_and_is_visually_correct(tmp_path, animation):
+    from jarvis.video_editor import media_import, multisource_export as mse, storage
+    from jarvis.video_editor.timeline import Timeline, TimelineClip
+
+    project = storage.create_project()
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=blue:s=1080x1920:d=2", "-c:v", "libx264", "-t", "2", str(clip)],
+        capture_output=True, timeout=30, check=True,
+    )
+    m1 = media_import.import_media(clip, project, media_item_id="m1")
+    media_items = {"m1": m1}
+    timeline = Timeline(items=(
+        TimelineClip(clip_id="c1", media_item_id="m1", source_in_seconds=0.0, source_out_seconds=2.0),
+    ), aspect_ratio="9:16")
+    fmt = mse.resolve_export_format("9:16", "720p")
+
+    words = [
+        WordTiming(start_seconds=0.1, end_seconds=0.5, text="Hello"),
+        WordTiming(start_seconds=0.55, end_seconds=0.9, text="world"),
+    ]
+    style = CaptionStyle(animation=animation)
+    clause = build_caption_filter(words, style)
+
+    plain_path = project.exports_dir / "plain.mp4"
+    captioned_path = project.exports_dir / f"{animation}.mp4"
+    mse.export_timeline(timeline, media_items, export_format=fmt, output_path=plain_path)
+    result = mse.export_timeline(
+        timeline, media_items, export_format=fmt, output_path=captioned_path, caption_filter=clause,
+    )
+    assert result.output_path.is_file()
+    mse._verify_playable_encoding(captioned_path, ffmpeg_path="ffmpeg")  # must not raise
+
+    frame_plain = tmp_path / "plain.png"
+    frame_captioned = tmp_path / f"{animation}.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", "0.3", "-i", str(plain_path), "-frames:v", "1", str(frame_plain)],
+        capture_output=True, timeout=15, check=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", "0.3", "-i", str(captioned_path), "-frames:v", "1", str(frame_captioned)],
+        capture_output=True, timeout=15, check=True,
+    )
+    assert Image.open(frame_plain).tobytes() != Image.open(frame_captioned).tobytes()
+
+
+# --- language selection + SRT export -----------------------------------------------------------
+
+
+def test_caption_language_choices_includes_lithuanian_first_not_auto():
+    from jarvis.video_editor.captions import CAPTION_LANGUAGE_CHOICES, DEFAULT_CAPTION_LANGUAGE
+
+    assert CAPTION_LANGUAGE_CHOICES[0] == "lt"
+    assert DEFAULT_CAPTION_LANGUAGE == "lt"
+    assert "auto" in CAPTION_LANGUAGE_CHOICES  # still available, just never the default
+
+
+def test_caption_language_labels_cover_every_choice():
+    from jarvis.video_editor.captions import CAPTION_LANGUAGE_CHOICES, CAPTION_LANGUAGE_LABELS
+
+    for code in CAPTION_LANGUAGE_CHOICES:
+        assert code in CAPTION_LANGUAGE_LABELS
+        assert CAPTION_LANGUAGE_LABELS[code].strip()
+
+
+def test_generate_word_timings_default_language_is_lithuanian_not_auto():
+    import inspect
+
+    from jarvis.video_editor.captions import generate_word_timings
+
+    sig = inspect.signature(generate_word_timings)
+    assert sig.parameters["language"].default == "lt"
+
+
+def test_export_srt_writes_a_real_valid_srt_file(tmp_path):
+    from jarvis.video_editor.captions import CaptionLine, export_srt
+
+    lines = [
+        CaptionLine(text="Labas, pasauli!", start_seconds=0.0, end_seconds=1.5),
+        CaptionLine(text="Antra eilutė.", start_seconds=1.5, end_seconds=3.0),
+    ]
+    out = tmp_path / "subtitles.srt"
+    export_srt(lines, out)
+
+    content = out.read_text(encoding="utf-8")
+    assert "1\n00:00:00,000 --> 00:00:01,500\nLabas, pasauli!" in content
+    assert "2\n00:00:01,500 --> 00:00:03,000\nAntra eilutė." in content
+
+
+def test_export_srt_preserves_lithuanian_diacritics(tmp_path):
+    from jarvis.video_editor.captions import CaptionLine, export_srt
+
+    text = "ąčęėįšųūž ĄČĘĖĮŠŲŪŽ"
+    lines = [CaptionLine(text=text, start_seconds=0.0, end_seconds=1.0)]
+    out = tmp_path / "subtitles.srt"
+    export_srt(lines, out)
+
+    content = out.read_text(encoding="utf-8")
+    assert text in content
+
+
+def test_export_srt_with_empty_lines_writes_an_empty_file(tmp_path):
+    from jarvis.video_editor.captions import export_srt
+
+    out = tmp_path / "empty.srt"
+    export_srt([], out)
+    assert out.read_text(encoding="utf-8") == ""
+
+
+def test_export_srt_handles_multiple_lines_with_correct_sequential_numbering(tmp_path):
+    from jarvis.video_editor.captions import CaptionLine, export_srt
+
+    lines = [
+        CaptionLine(text=f"Line {i}", start_seconds=float(i), end_seconds=float(i + 1))
+        for i in range(5)
+    ]
+    out = tmp_path / "many.srt"
+    export_srt(lines, out)
+    content = out.read_text(encoding="utf-8")
+    for i in range(5):
+        assert f"\n{i + 1}\n" in f"\n{content}"

@@ -89,6 +89,13 @@ _RESOLUTION_TIERS: dict[str, dict[str, tuple[int, int]]] = {
     "9:16": {"720p": (720, 1280), "1080p": (1080, 1920), "4k": (2160, 3840)},
     "1:1": {"720p": (720, 720), "1080p": (1080, 1080), "4k": (2160, 2160)},
     "16:9": {"720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)},
+    # "4:5" (Instagram's own standard portrait FEED-post crop, e.g.
+    # 1080x1350 at 1080p) - a real, previously-flagged-missing export
+    # format, added for Stage 6 of the "professional Reels editor"
+    # plan. Every width/height here is an exact 4:5 ratio (864x1080,
+    # 1080x1350, 2160x2700), matching the same "exact ratio per tier"
+    # precedent the other three aspect ratios above already establish.
+    "4:5": {"720p": (864, 1080), "1080p": (1080, 1350), "4k": (2160, 2700)},
 }
 RESOLUTION_TIER_CHOICES = ("720p", "1080p", "4k")
 
@@ -414,7 +421,7 @@ def _apply_crossfades(trim_parts, concat_video_labels, concat_audio_labels, xfad
     return "outv", "outa"
 
 
-def _extract_output_label(filter_clause: str) -> str:
+def extract_output_label(filter_clause: str) -> str:
     """Parses the trailing `[label]` off a filter clause string like
     `"[outv]drawtext=...[capv]"` - returns `"capv"`. Used so
     export_timeline() can `-map` the REAL output label a caller-supplied
@@ -429,11 +436,26 @@ def _extract_output_label(filter_clause: str) -> str:
     return label.rstrip("]")
 
 
+def _extract_leading_input_index(filter_clause: str) -> int | None:
+    """Parses the leading `[<digits>:a]`/`[<digits>:v]` ffmpeg input
+    reference off the START of a filter clause string like
+    `"[1:a]atrim=...[music];..."` - returns `1`. Returns None if the
+    clause doesn't start with a plain numeric input reference (e.g. an
+    already-labeled stage reading from a named label like `[outa]`
+    instead of a raw input index) - a best-effort check used only by
+    export_timeline()'s own defensive audio_mix_filter collision check
+    above, never relied on for anything export-correctness-critical."""
+    import re
+
+    match = re.match(r"^\[(\d+):[av]\]", filter_clause)
+    return int(match.group(1)) if match else None
+
+
 def export_timeline(
     timeline: Timeline, media_items: dict[str, MediaItem], *, export_format: ExportFormat, output_path: Path,
     progress_callback: Callable[[float], None] | None = None, cancel_event: threading.Event | None = None,
     caption_filter: str | None = None, audio_mix_filter: tuple[list[str], str, str] | None = None,
-    text_overlay_filter: str | None = None,
+    text_overlay_filter: str | None = None, sticker_filters: list[tuple[list[str], str]] | None = None,
 ) -> ExportResult:
     """Renders `timeline` into `output_path` - ALWAYS a new file (the
     caller is responsible for pointing this at the project's own
@@ -487,7 +509,25 @@ def export_timeline(
     AFTER `caption_filter` (if both are given) so a timeline can have
     both real transcribed captions AND free text overlays at once, each
     reading from whichever video label came before it - this function
-    never assumes only one of the two is ever used."""
+    never assumes only one of the two is ever used.
+
+    `sticker_filters` (animated stickers/GIF/emoji -
+    jarvis.video_editor.stickers.build_sticker_filter()), if given, is a
+    list of (extra_input_args, filter_clause) tuples - one per sticker,
+    applied IN ORDER after text_overlay_filter, each sticker's own
+    extra_input_args appended to input_args before that sticker's own
+    filter_clause runs (so a sticker's own image occupies the NEXT input
+    index after whatever came before it - the caller is responsible for
+    choosing each sticker's own `input_index` to match this ordering,
+    exactly as jarvis.video_editor.audio_mixing.build_music_mix_filter()'s
+    own `timeline_audio_input_count` parameter already requires for its
+    one music input). Every sticker's own filter_clause already bakes in
+    which video label it reads from at build time - the caller builds
+    each one's own `video_label` to match whatever the PREVIOUS stage
+    (the raw timeline, captions, text overlays, or an earlier sticker)
+    actually produced, mirroring the same chaining responsibility
+    dashboard.py's own _start_export() already has for text_overlay_filter
+    reading from "capv" vs "outv"."""
     ffmpeg = _require_ffmpeg()
     problems = timeline.validate()
     if problems:
@@ -501,12 +541,49 @@ def export_timeline(
     filter_stages = [full_filter]
     if caption_filter is not None:
         filter_stages.append(caption_filter)
-        video_out = _extract_output_label(caption_filter)
+        video_out = extract_output_label(caption_filter)
     if text_overlay_filter is not None:
         filter_stages.append(text_overlay_filter)
-        video_out = _extract_output_label(text_overlay_filter)
+        video_out = extract_output_label(text_overlay_filter)
+    for extra_input_args, sticker_filter_clause in (sticker_filters or []):
+        input_args = input_args + extra_input_args
+        filter_stages.append(sticker_filter_clause)
+        video_out = extract_output_label(sticker_filter_clause)
     if audio_mix_filter is not None:
         extra_input_args, audio_filter_clause, mixed_audio_label = audio_mix_filter
+        # Real, hand-hit regression this check guards against: a caller
+        # (jarvis.gui.views.video_editor.dashboard's own _start_export())
+        # once computed audio_mix_filter's own input index without
+        # accounting for sticker_filters' own already-claimed indices,
+        # so the music input's own `[N:a]` reference collided with a
+        # sticker's PNG input - ffmpeg then failed deep inside its own
+        # filtergraph binding step with a cryptic "matches no streams" /
+        # "output unconnected" error that gave no indication the real
+        # cause was a caller-side index collision. This check reads the
+        # real input index audio_filter_clause's own `[N:a]` reference
+        # names (the first `[<digits>:a]` token in the clause, the same
+        # convention build_music_mix_filter()'s own docstring documents
+        # for how its filter_clause addresses its own music input) and
+        # fails FAST, before ever invoking ffmpeg, with a message that
+        # names the actual problem - the caller miscounted inputs -
+        # rather than letting ffmpeg's own far more cryptic filtergraph
+        # parser error be the only signal.
+        referenced_index = _extract_leading_input_index(audio_filter_clause)
+        # input_args is a flat argv list (e.g. ["-loop","1","-t","3","-i",path,...]) -
+        # its own len() is NOT the input COUNT (a still contributes 6
+        # list elements for ONE real `-i`, a plain clip contributes 2) -
+        # a real bug in this check's own first draft, caught by the
+        # existing audio_mixing test suite immediately. Count actual
+        # "-i" occurrences instead.
+        already_claimed = input_args.count("-i")
+        if referenced_index is not None and referenced_index < already_claimed:
+            raise MultiSourceExportError(
+                f"Internal error building the export: the music track's own ffmpeg input "
+                f"(index {referenced_index}) collides with an input already used by a sticker or other "
+                f"overlay (there are already {already_claimed} other inputs). This indicates a bug in "
+                f"how the export filter chain was assembled, not a problem with your project - "
+                f"please report this."
+            )
         input_args = input_args + extra_input_args
         filter_stages.append(audio_filter_clause)
         audio_out = mixed_audio_label

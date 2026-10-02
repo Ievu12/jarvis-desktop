@@ -13,9 +13,10 @@ from typing import Callable
 import customtkinter as ctk
 
 from jarvis.gui import theme
-from jarvis.gui.views.video_editor.common import status_label
+from jarvis.gui.views.video_editor.common import LabeledDropdown, status_label
 from jarvis.gui.widgets import Card
-from jarvis.video_editor.text_overlay import TEXT_ANIMATION_CHOICES, TextOverlay
+from jarvis.video_editor.text_overlay import TEXT_ANIMATION_CHOICES, TEXT_SLIDE_DIRECTION_CHOICES, TextOverlay
+from jarvis.video_editor.text_templates import COLOR_PALETTES, TEXT_TEMPLATE_NAMES, get_color_palette, get_text_template
 
 
 class TextOverlayPanel(ctk.CTkFrame):
@@ -109,11 +110,25 @@ class TextOverlayPanel(ctk.CTkFrame):
         ctk.CTkLabel(row2, text="Color:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         color_entry.pack(side="left")
 
-        from jarvis.gui.views.video_editor.common import LabeledDropdown
-
-        anim_dropdown = LabeledDropdown(inner, "Animation:", TEXT_ANIMATION_CHOICES)
+        row3 = ctk.CTkFrame(inner, fg_color="transparent")
+        row3.pack(fill="x", pady=(0, theme.SPACE_XS))
+        anim_dropdown = LabeledDropdown(row3, "Animation:", TEXT_ANIMATION_CHOICES)
         anim_dropdown.set(overlay.animation)
-        anim_dropdown.pack(anchor="w", pady=(0, theme.SPACE_XS))
+        anim_dropdown.pack(side="left", padx=(0, theme.SPACE_MD))
+
+        direction_dropdown = LabeledDropdown(row3, "Direction:", TEXT_SLIDE_DIRECTION_CHOICES)
+        direction_dropdown.set(overlay.direction)
+        direction_dropdown.pack(side="left", padx=(0, theme.SPACE_MD))
+
+        speed_entry = ctk.CTkEntry(row3, width=50)
+        speed_entry.insert(0, f"{overlay.speed:g}")
+        ctk.CTkLabel(row3, text="Speed:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        speed_entry.pack(side="left", padx=(0, theme.SPACE_MD))
+
+        intensity_entry = ctk.CTkEntry(row3, width=50)
+        intensity_entry.insert(0, f"{overlay.intensity:g}")
+        ctk.CTkLabel(row3, text="Intensity:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        intensity_entry.pack(side="left")
 
         error_label = status_label(inner, "", kind="error")
 
@@ -123,7 +138,8 @@ class TextOverlayPanel(ctk.CTkFrame):
                     text=text_entry.get(), start_seconds=float(start_entry.get()), end_seconds=float(end_entry.get()),
                     x_fraction=float(x_entry.get()), y_fraction=float(y_entry.get()),
                     font_size=int(size_entry.get()), color=color_entry.get().strip() or "white",
-                    animation=anim_dropdown.get(),
+                    animation=anim_dropdown.get(), speed=float(speed_entry.get()), intensity=float(intensity_entry.get()),
+                    direction=direction_dropdown.get(),
                 )
             except ValueError:
                 return
@@ -136,10 +152,62 @@ class TextOverlayPanel(ctk.CTkFrame):
             self._overlays[index] = new_overlay
             self._emit()
 
-        for entry in (text_entry, start_entry, end_entry, size_entry, x_entry, y_entry, color_entry):
+        for entry in (text_entry, start_entry, end_entry, size_entry, x_entry, y_entry, color_entry, speed_entry, intensity_entry):
             entry.bind("<FocusOut>", on_change)
             entry.bind("<Return>", on_change)
         anim_dropdown.dropdown.configure(command=lambda _v: on_change())
+        direction_dropdown.dropdown.configure(command=lambda _v: on_change())
+
+        row4 = ctk.CTkFrame(inner, fg_color="transparent")
+        row4.pack(fill="x", pady=(0, theme.SPACE_XS))
+        template_dropdown = LabeledDropdown(row4, "Template:", TEXT_TEMPLATE_NAMES)
+        template_dropdown.pack(side="left", padx=(0, theme.SPACE_SM))
+
+        def on_apply_template() -> None:
+            template = get_text_template(template_dropdown.get())
+            if template is None:
+                return
+            size_entry.delete(0, "end")
+            size_entry.insert(0, str(template.font_size))
+            color_entry.delete(0, "end")
+            color_entry.insert(0, template.color)
+            anim_dropdown.set(template.animation)
+            direction_dropdown.set(template.direction)
+            speed_entry.delete(0, "end")
+            speed_entry.insert(0, f"{template.speed:g}")
+            intensity_entry.delete(0, "end")
+            intensity_entry.insert(0, f"{template.intensity:g}")
+            on_change()
+
+        ctk.CTkButton(row4, text="✨ Apply", width=70, height=24, command=on_apply_template).pack(
+            side="left", padx=(0, theme.SPACE_MD),
+        )
+
+        palette_dropdown = LabeledDropdown(row4, "Palette:", tuple(p.name for p in COLOR_PALETTES))
+        palette_dropdown.pack(side="left", padx=(0, theme.SPACE_SM))
+
+        def on_pick_palette_color(color: str) -> None:
+            color_entry.delete(0, "end")
+            color_entry.insert(0, color)
+            on_change()
+
+        def on_show_palette() -> None:
+            palette = get_color_palette(palette_dropdown.get())
+            if palette is None:
+                return
+            for swatch in list(swatches_row.winfo_children()):
+                swatch.destroy()
+            for color in palette.colors:
+                ctk.CTkButton(
+                    swatches_row, text="", width=22, height=22, fg_color=color, hover_color=color,
+                    border_width=1, border_color=theme.BORDER_SUBTLE,
+                    command=lambda c=color: on_pick_palette_color(c),
+                ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(row4, text="🎨 Show", width=70, height=24, command=on_show_palette).pack(side="left")
+
+        swatches_row = ctk.CTkFrame(inner, fg_color="transparent")
+        swatches_row.pack(fill="x", pady=(0, theme.SPACE_XS))
 
         ctk.CTkButton(
             inner, text="🗑 Remove", width=90, height=24, command=lambda i=index: self._remove(i),

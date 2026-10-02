@@ -41,6 +41,7 @@ from jarvis.video_editor.timeline import (
     TimelineStill,
     TransitionSpec,
 )
+from jarvis.video_editor.timeline_history import TimelineClipboard, TimelineHistory
 
 _THUMBNAIL_HEIGHT = 120
 
@@ -75,6 +76,8 @@ class TimelinePanel(ctk.CTkFrame):
         self._timeline = Timeline()
         self._media_items: dict[str, MediaItem] = {}
         self._preview_containers: dict[int, ctk.CTkFrame] = {}
+        self._history = TimelineHistory()
+        self._clipboard = TimelineClipboard()
 
         header_row = ctk.CTkFrame(self, fg_color="transparent")
         header_row.pack(fill="x")
@@ -88,6 +91,20 @@ class TimelinePanel(ctk.CTkFrame):
         self._aspect_dropdown.dropdown.configure(command=lambda _v: self._on_aspect_changed())
         self._aspect_dropdown.pack(side="right")
 
+        history_row = ctk.CTkFrame(self, fg_color="transparent")
+        history_row.pack(fill="x", pady=(theme.SPACE_XS, 0))
+        self._undo_button = ctk.CTkButton(
+            history_row, text="↩ Undo", width=80, height=24, command=self._on_undo_clicked,
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        )
+        self._undo_button.pack(side="left", padx=(0, theme.SPACE_XS))
+        self._redo_button = ctk.CTkButton(
+            history_row, text="↪ Redo", width=80, height=24, command=self._on_redo_clicked,
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        )
+        self._redo_button.pack(side="left")
+        self._update_history_buttons()
+
         self._items_container = ctk.CTkFrame(self, fg_color="transparent")
         self._items_container.pack(fill="x", pady=(theme.SPACE_SM, 0))
 
@@ -100,6 +117,48 @@ class TimelinePanel(ctk.CTkFrame):
     @property
     def timeline(self) -> Timeline:
         return self._timeline
+
+    def _commit(self, new_timeline: Timeline) -> None:
+        """The ONE place every real edit in this panel ends up: updates
+        `self._timeline`, records the change on the undo/redo history,
+        re-renders, and notifies the owning dashboard - replaces the
+        repeated "set _timeline, render, notify" triplet every mutation
+        method below used to do inline, so undo/redo wiring needed one
+        new call site, not seven rewritten ones."""
+        self._history.push(new_timeline)
+        self._timeline = new_timeline
+        self._update_history_buttons()
+        self._rerender(self._timeline)
+        self._on_timeline_changed(self._timeline)
+
+    def _update_history_buttons(self) -> None:
+        self._undo_button.configure(state="normal" if self._history.can_undo() else "disabled")
+        self._redo_button.configure(state="normal" if self._history.can_redo() else "disabled")
+
+    def _on_undo_clicked(self) -> None:
+        restored = self._history.undo()
+        self._timeline = restored
+        self._update_history_buttons()
+        self._rerender(self._timeline)
+        self._on_timeline_changed(self._timeline)
+
+    def _on_redo_clicked(self) -> None:
+        restored = self._history.redo()
+        self._timeline = restored
+        self._update_history_buttons()
+        self._rerender(self._timeline)
+        self._on_timeline_changed(self._timeline)
+
+    def _on_copy_clicked(self, index: int) -> None:
+        self._clipboard.copy(self._timeline.items[index])
+
+    def _on_paste_clicked(self, index: int) -> None:
+        pasted = self._clipboard.paste(new_clip_id=_new_clip_id())
+        if pasted is None:
+            return
+        items = list(self._timeline.items)
+        items.insert(index + 1, pasted)
+        self._commit(dataclasses.replace(self._timeline, items=tuple(items)))
 
     def add_clip(self, media_item: MediaItem) -> None:
         """Appends `media_item` to the end of the timeline - a video
@@ -117,13 +176,36 @@ class TimelinePanel(ctk.CTkFrame):
                 clip_id=_new_clip_id(), media_item_id=media_item.media_item_id, display_duration_seconds=3.0,
             )
         self._media_items[media_item.media_item_id] = media_item
-        self._timeline = dataclasses.replace(self._timeline, items=(*self._timeline.items, item))
-        self.render(self._timeline, self._media_items)
-        self._on_timeline_changed(self._timeline)
+        self._commit(dataclasses.replace(self._timeline, items=(*self._timeline.items, item)))
+
+    def apply_timeline(self, new_timeline: Timeline) -> None:
+        """Replaces the current timeline with `new_timeline` through
+        the SAME `_commit()` path every other edit in this panel uses -
+        unlike `render()` (the project-OPEN entry point, which always
+        resets the undo/redo history), this is a real, undoable EDIT:
+        used by the owning dashboard's "Apply Reel Template" action
+        (jarvis.video_editor.reel_templates.apply_template() already
+        returns a new Timeline built from the current one, never a
+        fresh/unrelated one), so applying a template is itself a single
+        Undo away from being reverted."""
+        self._commit(new_timeline)
 
     def render(self, timeline: Timeline, media_items: dict[str, MediaItem]) -> None:
-        self._timeline = timeline
+        """The EXTERNAL entry point the owning dashboard calls on
+        project open/load (see dashboard.py's own single call site) -
+        always resets the undo/redo history, since a freshly-loaded
+        project's own edit history never existed in this running GUI
+        session (same reasoning TimelineHistory.reset()'s own docstring
+        gives). Internal re-renders after an edit (_commit()/undo/redo)
+        call `_rerender()` directly instead, so they never wipe the
+        history they just updated."""
         self._media_items = media_items
+        self._history.reset(timeline)
+        self._timeline = timeline
+        self._update_history_buttons()
+        self._rerender(timeline)
+
+    def _rerender(self, timeline: Timeline) -> None:
         self._aspect_dropdown.set(timeline.aspect_ratio)
 
         for child in self._items_container.winfo_children():
@@ -401,14 +483,21 @@ class TimelinePanel(ctk.CTkFrame):
         ctk.CTkButton(
             row, text="🗑 Remove", width=90, height=24, command=lambda i=index: self._remove_item(i),
             fg_color=theme.BG_CARD, hover_color=theme.DANGER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        ).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkButton(
+            row, text="📋 Copy", width=80, height=24, command=lambda i=index: self._on_copy_clicked(i),
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        ).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkButton(
+            row, text="📎 Paste After", width=100, height=24, command=lambda i=index: self._on_paste_clicked(i),
+            state="normal" if self._clipboard.has_item() else "disabled",
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(side="left")
 
     def _replace_item(self, index: int, new_item) -> None:
         items = list(self._timeline.items)
         items[index] = new_item
-        self._timeline = dataclasses.replace(self._timeline, items=tuple(items))
-        self.render(self._timeline, self._media_items)
-        self._on_timeline_changed(self._timeline)
+        self._commit(dataclasses.replace(self._timeline, items=tuple(items)))
 
     def _move_item(self, index: int, direction: int) -> None:
         items = list(self._timeline.items)
@@ -416,21 +505,15 @@ class TimelinePanel(ctk.CTkFrame):
         if not (0 <= target < len(items)):
             return
         items[index], items[target] = items[target], items[index]
-        self._timeline = dataclasses.replace(self._timeline, items=tuple(items))
-        self.render(self._timeline, self._media_items)
-        self._on_timeline_changed(self._timeline)
+        self._commit(dataclasses.replace(self._timeline, items=tuple(items)))
 
     def _remove_item(self, index: int) -> None:
         items = list(self._timeline.items)
         del items[index]
-        self._timeline = dataclasses.replace(self._timeline, items=tuple(items))
-        self.render(self._timeline, self._media_items)
-        self._on_timeline_changed(self._timeline)
+        self._commit(dataclasses.replace(self._timeline, items=tuple(items)))
 
     def _on_aspect_changed(self) -> None:
-        self._timeline = dataclasses.replace(self._timeline, aspect_ratio=self._aspect_dropdown.get())
-        self.render(self._timeline, self._media_items)
-        self._on_timeline_changed(self._timeline)
+        self._commit(dataclasses.replace(self._timeline, aspect_ratio=self._aspect_dropdown.get()))
 
 
 _next_clip_id = 0

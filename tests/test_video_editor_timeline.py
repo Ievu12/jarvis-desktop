@@ -19,11 +19,12 @@ from jarvis.video_editor.timeline import (
     TimelineClip,
     TimelineStill,
     TransitionSpec,
+    apply_effect_to_every_item,
 )
 
 
 def test_aspect_ratio_and_transition_kind_choices():
-    assert ASPECT_RATIO_CHOICES == ("9:16", "1:1", "16:9")
+    assert ASPECT_RATIO_CHOICES == ("9:16", "1:1", "16:9", "4:5")
     assert TRANSITION_KIND_CHOICES == ("cut", "fade", "dissolve", "slide_left", "slide_right")
 
 
@@ -198,3 +199,43 @@ def test_timeline_never_raises_for_any_malformed_input():
     problems = timeline.validate()
     assert isinstance(problems, list)
     assert len(problems) > 0
+
+
+def test_apply_effect_to_every_item_sets_every_items_effect():
+    from jarvis.video_editor.effects import EffectSpec
+
+    new_effect = EffectSpec(motion="zoom_in", motion_intensity=1.3)
+    timeline = Timeline(items=(
+        TimelineClip(clip_id="c1", media_item_id="m1", source_in_seconds=0.0, source_out_seconds=5.0),
+        TimelineStill(clip_id="s1", media_item_id="m2", display_duration_seconds=2.0),
+    ))
+    result = apply_effect_to_every_item(timeline, new_effect)
+    assert all(item.effect == new_effect for item in result.items)
+
+
+def test_apply_effect_to_every_item_never_touches_identity_order_or_trim():
+    from jarvis.video_editor.effects import EffectSpec
+
+    clip = TimelineClip(clip_id="c1", media_item_id="m1", source_in_seconds=1.0, source_out_seconds=4.0, speed_factor=1.5)
+    timeline = Timeline(items=(clip,))
+    result = apply_effect_to_every_item(timeline, EffectSpec(motion="pan_left"))
+    result_clip = result.items[0]
+    assert result_clip.clip_id == clip.clip_id
+    assert result_clip.source_in_seconds == clip.source_in_seconds
+    assert result_clip.source_out_seconds == clip.source_out_seconds
+    assert result_clip.speed_factor == clip.speed_factor
+
+
+def test_apply_effect_to_every_item_leaves_aspect_ratio_unchanged():
+    from jarvis.video_editor.effects import EffectSpec
+
+    timeline = Timeline(items=(TimelineClip(clip_id="c1", media_item_id="m1", source_in_seconds=0.0, source_out_seconds=3.0),), aspect_ratio="1:1")
+    result = apply_effect_to_every_item(timeline, EffectSpec())
+    assert result.aspect_ratio == "1:1"
+
+
+def test_apply_effect_to_every_item_on_an_empty_timeline_never_raises():
+    from jarvis.video_editor.effects import EffectSpec
+
+    result = apply_effect_to_every_item(Timeline(), EffectSpec())
+    assert result.items == ()
