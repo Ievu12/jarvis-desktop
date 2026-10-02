@@ -309,3 +309,78 @@ def test_real_export_with_kinetic_animation_succeeds_and_stays_compatible(tmp_pa
         capture_output=True, timeout=15, check=True,
     )
     assert Image.open(frame_plain).tobytes() != Image.open(frame_anim).tobytes()
+
+
+# --- rotation and resolution scaling -----------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from jarvis.video_editor.text_overlay import (  # noqa: E402
+    ROTATABLE_TEXT_ANIMATIONS,
+    TextOverlay,
+    build_rotated_text_filters,
+    build_text_overlay_filter,
+    text_scale_for,
+)
+
+
+def test_rotation_is_only_valid_with_plain_or_fade_animation():
+    assert not TextOverlay(text="Hi", start_seconds=0, end_seconds=1, rotation_degrees=20).validate()
+    assert not TextOverlay(text="Hi", start_seconds=0, end_seconds=1, rotation_degrees=20, animation="fade").validate()
+    problems = TextOverlay(text="Hi", start_seconds=0, end_seconds=1, rotation_degrees=20, animation="bounce").validate()
+    assert any("Rotated text" in p for p in problems)
+    assert set(ROTATABLE_TEXT_ANIMATIONS) == {"none", "fade"}
+
+
+def test_full_turn_counts_as_unrotated():
+    assert not TextOverlay(text="Hi", start_seconds=0, end_seconds=1, rotation_degrees=360).is_rotated
+
+
+def test_drawtext_filter_skips_rotated_overlays():
+    plain = TextOverlay(text="Plain", start_seconds=0, end_seconds=1)
+    turned = TextOverlay(text="Turned", start_seconds=0, end_seconds=1, rotation_degrees=15)
+    clause = build_text_overlay_filter([plain, turned])
+    assert "Plain" in clause and "Turned" not in clause
+
+
+def test_rotated_text_becomes_an_image_overlay_input(tmp_path):
+    turned = TextOverlay(text="Turned", start_seconds=1, end_seconds=2, rotation_degrees=15, animation="fade")
+    filters, label = build_rotated_text_filters(
+        [TextOverlay(text="Plain", start_seconds=0, end_seconds=1), turned],
+        canvas_width=1080, canvas_height=1920, cwd=tmp_path, video_label="textv", first_input_index=3,
+    )
+    assert len(filters) == 1
+    extra_args, clause = filters[0]
+    assert extra_args[-2] == "-i" and Path(extra_args[-1]).is_file()
+    assert clause.startswith("[3:v]") and "fade=t=in" in clause and "[textv]" in clause
+    assert label == "rtextv0"
+
+
+def test_text_scale_keeps_1080p_sizes_and_scales_other_tiers():
+    assert text_scale_for(1080, 1920) == 1.0
+    assert text_scale_for(720, 1280) == pytest.approx(720 / 1080)
+    assert text_scale_for(3840, 2160) == 2.0
+    clause = build_text_overlay_filter([TextOverlay(text="Hi", start_seconds=0, end_seconds=1, font_size=60)], scale=2.0)
+    assert "fontsize=120" in clause
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_rotated_text_appears_in_a_real_render(tmp_path):
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=30:d=2", "-c:v", "libx264", str(clip)],
+        capture_output=True, timeout=30, check=True,
+    )
+    turned = TextOverlay(text="TURNED", start_seconds=0.5, end_seconds=1.5, rotation_degrees=90, font_size=60)
+    filters, label = build_rotated_text_filters(
+        [turned], canvas_width=640, canvas_height=360, cwd=tmp_path, video_label="base", first_input_index=1,
+    )
+    (extra_args, clause), = filters
+    frame = tmp_path / "frame.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(clip), *extra_args, "-filter_complex", f"[0:v]null[base];{clause}",
+         "-map", f"[{label}]", "-ss", "1.0", "-frames:v", "1", str(frame)],
+        capture_output=True, timeout=30, check=True, cwd=str(tmp_path),
+    )
+    left, top, right, bottom = Image.open(frame).convert("L").point(lambda v: 255 if v > 128 else 0).getbbox()
+    assert (bottom - top) > (right - left) * 2  # turned 90 degrees: taller than wide

@@ -178,6 +178,7 @@ def load_project(project_id: str):
 
     from jarvis.video_editor import db
     from jarvis.video_editor.media_import import MediaItem
+    from jarvis.video_editor.effects import EffectSpec
     from jarvis.video_editor.timeline import Timeline, TimelineClip, TimelineStill, TransitionSpec
 
     record = db.get_project(project_id)
@@ -189,17 +190,22 @@ def load_project(project_id: str):
         items = []
         for item_data in record.timeline_data.get("items", []):
             transition_data = item_data.get("transition_out") or {}
-            transition = TransitionSpec(**transition_data) if transition_data else TransitionSpec()
+            transition = _dataclass_from_dict(TransitionSpec, transition_data)
+            # `effect` was saved (dataclasses.asdict() includes it) but
+            # never read back - a real bug: every motion/fade/color
+            # effect silently disappeared when a project was reopened.
+            effect = _dataclass_from_dict(EffectSpec, item_data.get("effect") or {})
             if "source_in_seconds" in item_data:
                 items.append(TimelineClip(
                     clip_id=item_data["clip_id"], media_item_id=item_data["media_item_id"],
                     source_in_seconds=item_data["source_in_seconds"], source_out_seconds=item_data["source_out_seconds"],
-                    speed_factor=item_data.get("speed_factor", 1.0), transition_out=transition,
+                    speed_factor=item_data.get("speed_factor", 1.0), transition_out=transition, effect=effect,
                 ))
             else:
                 items.append(TimelineStill(
                     clip_id=item_data["clip_id"], media_item_id=item_data["media_item_id"],
                     display_duration_seconds=item_data["display_duration_seconds"], transition_out=transition,
+                    effect=effect,
                 ))
         timeline = Timeline(items=tuple(items), aspect_ratio=record.timeline_data.get("aspect_ratio", "9:16"))
 
@@ -213,3 +219,102 @@ def load_project(project_id: str):
         )
 
     return timeline, media_items
+
+
+def _dataclass_from_dict(cls, data: dict, **overrides):
+    """Builds `cls` from a saved dict, ignoring keys `cls` no longer
+    has and letting fields missing from older saves fall back to their
+    own defaults - so adding a field to TextOverlay/StickerInstance/
+    EffectSpec later never breaks reopening an older project."""
+    import dataclasses
+
+    field_names = {f.name for f in dataclasses.fields(cls)}
+    kwargs = {k: v for k, v in data.items() if k in field_names}
+    kwargs.update(overrides)
+    return cls(**kwargs)
+
+
+@dataclass(frozen=True)
+class ProjectOverlays:
+    """Everything a project shows on top of its timeline - the state
+    the dashboard holds outside TimelinePanel. Saved as one JSON object
+    in jarvis.video_editor.db's overlays_data column."""
+
+    text_overlays: tuple = ()
+    stickers: tuple = ()
+    caption_style: object | None = None
+    caption_lines: tuple | None = None
+    music_track: object | None = None
+
+
+def save_overlays(project_id: str, overlays: ProjectOverlays) -> None:
+    """Persists `overlays` (Path fields converted to plain strings here,
+    the same single-conversion-point rule save_project() follows)."""
+    import dataclasses
+
+    from jarvis.video_editor import db
+
+    def sticker_dict(sticker) -> dict:
+        data = dataclasses.asdict(sticker)
+        data["custom_path"] = str(sticker.custom_path) if sticker.custom_path is not None else None
+        data["tint"] = list(sticker.tint) if sticker.tint is not None else None
+        return data
+
+    music_data = None
+    if overlays.music_track is not None:
+        music_data = {**dataclasses.asdict(overlays.music_track), "source_path": str(overlays.music_track.source_path)}
+
+    db.save_overlays(project_id, {
+        "text_overlays": [dataclasses.asdict(o) for o in overlays.text_overlays],
+        "stickers": [sticker_dict(s) for s in overlays.stickers],
+        "caption_style": dataclasses.asdict(overlays.caption_style) if overlays.caption_style is not None else None,
+        "caption_lines": (
+            [dataclasses.asdict(line) for line in overlays.caption_lines]
+            if overlays.caption_lines is not None else None
+        ),
+        "music_track": music_data,
+    })
+
+
+def load_overlays(project_id: str) -> ProjectOverlays:
+    """The inverse of save_overlays() - an empty ProjectOverlays for a
+    project that never saved any (every project created before the
+    overlays_data column existed)."""
+    from pathlib import Path as _Path
+
+    from jarvis.video_editor import db
+    from jarvis.video_editor.audio_mixing import MusicTrack
+    from jarvis.video_editor.captions import CaptionLine, CaptionStyle
+    from jarvis.video_editor.stickers import StickerInstance
+    from jarvis.video_editor.text_overlay import TextOverlay
+
+    record = db.get_project(project_id)
+    if record is None or not record.overlays_data:
+        return ProjectOverlays()
+    data = record.overlays_data
+
+    stickers = []
+    for sticker_data in data.get("stickers") or []:
+        custom_path = sticker_data.get("custom_path")
+        tint = sticker_data.get("tint")
+        stickers.append(_dataclass_from_dict(
+            StickerInstance, sticker_data,
+            custom_path=_Path(custom_path) if custom_path else None,
+            tint=tuple(tint) if tint else None,
+        ))
+
+    caption_lines = data.get("caption_lines")
+    music_data = data.get("music_track")
+    return ProjectOverlays(
+        text_overlays=tuple(_dataclass_from_dict(TextOverlay, o) for o in data.get("text_overlays") or []),
+        stickers=tuple(stickers),
+        caption_style=_dataclass_from_dict(CaptionStyle, data["caption_style"]) if data.get("caption_style") else None,
+        caption_lines=(
+            tuple(_dataclass_from_dict(CaptionLine, line) for line in caption_lines)
+            if caption_lines is not None else None
+        ),
+        music_track=(
+            _dataclass_from_dict(MusicTrack, music_data, source_path=_Path(music_data["source_path"]))
+            if music_data else None
+        ),
+    )

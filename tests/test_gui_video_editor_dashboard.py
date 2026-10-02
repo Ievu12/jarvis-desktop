@@ -1213,3 +1213,52 @@ def test_full_export_with_real_captions_and_music_produces_a_file(root, tmp_path
     assert result.output_path.is_file()
     assert result.width == 720
     assert result.height == 1280
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_live_preview_quick_add_edit_and_reopen_restores_overlays(root, tmp_path):
+    """The real-time preview flow: quick-add a text and a sticker, edit
+    them as the preview/settings panel would, delete one, and confirm a
+    reopened project shows exactly the edited elements again."""
+    import dataclasses
+
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view._on_quick_add_text()  # no project yet: refused, nothing added
+    assert view._text_overlays == []
+
+    view._on_new_project_clicked()
+    project_id = view._current_project.project_id
+    photo_path = tmp_path / "photo.png"
+    Image.new("RGB", (1080, 1920), color=(0, 0, 255)).save(photo_path)
+    view._on_files_chosen([photo_path])
+    _drain_queue_until(view, lambda: len(view._media_items) == 1)
+    view._on_add_to_timeline_clicked(next(iter(view._media_items.values())))
+    assert view._engine is not None and view._engine.duration > 0
+    view._run_base_frame_decode()  # normally fired by a short after() debounce
+    _drain_queue_until(view, lambda: view._preview_panel._base_frame is not None, timeout=60)
+
+    view._on_quick_add_text()
+    view._on_quick_add_sticker()
+    assert len(view._text_overlays) == 1 and len(view._stickers) == 1
+    assert view._preview_panel.selected == ("sticker", 0)
+    assert {box.kind for box in view._preview_panel.boxes} == {"text", "sticker"}
+
+    moved = dataclasses.replace(view._stickers[0], x_fraction=0.8, rotation_degrees=45.0)
+    view._on_element_edited("sticker", 0, moved, False)
+    assert view._stickers[0] == moved  # applied at once, before the edit is final
+    view._on_element_edited("sticker", 0, moved, True)
+    assert view._stickers_panel._stickers == [moved]  # the Stickers panel list is kept in sync
+
+    edited_text = dataclasses.replace(view._text_overlays[0], text="Sveiki, ąčęėįšųūž!", font_size=96)
+    view._on_element_edited("text", 0, edited_text, True)
+    view._on_element_duplicate_requested("text", 0)
+    assert len(view._text_overlays) == 2
+    view._on_element_delete_requested("text", 1)
+    assert view._text_overlays == [edited_text]
+    view._save_overlays_now()
+
+    reopened = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    reopened._open_project(project_id)
+    assert reopened._text_overlays == [edited_text]
+    assert reopened._stickers == [moved]
+    assert reopened._preview_panel.selected is None

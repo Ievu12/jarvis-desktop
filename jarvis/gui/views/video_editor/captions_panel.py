@@ -193,6 +193,20 @@ class CaptionsPanel(ctk.CTkFrame):
         self._background_var.set("on" if style.background else "off")
         self._on_toggle()
 
+    def reset(self) -> None:
+        """Captions OFF and no lines - the state of a project that never
+        enabled captions (used when another project is opened). Emits
+        nothing; the dashboard resets its own caption state itself."""
+        self._toggle_var.set("off")
+        self._enabled = False
+        self._controls_row.pack_forget()
+        self._style_row.pack_forget()
+        self._lines = []
+        for child in self._lines_container.winfo_children():
+            child.destroy()
+        self._lines_container.pack_forget()
+        self._lines_status.pack_forget()
+
     def _on_generate_clicked(self) -> None:
         self._on_generate_requested(self.get_language())
 

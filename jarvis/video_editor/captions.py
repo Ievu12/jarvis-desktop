@@ -32,6 +32,8 @@ word-by-word reveal genuinely needs `drawtext`'s own per-clause
 
 from __future__ import annotations
 
+import dataclasses
+
 import json
 import os
 import subprocess
@@ -439,9 +441,21 @@ def _style_suffix(style: CaptionStyle) -> str:
     return (":" + ":".join(parts)) if parts else ""
 
 
+def scale_caption_style(style: CaptionStyle, scale: float) -> CaptionStyle:
+    """`style` with its pixel sizes (font, outline, shadow) multiplied
+    by `scale` - see jarvis.video_editor.text_overlay.text_scale_for():
+    caption sizes are 1080p pixels, scaled per export resolution."""
+    if scale == 1.0:
+        return style
+    return dataclasses.replace(
+        style, font_size=max(1, round(style.font_size * scale)),
+        outline_width=round(style.outline_width * scale), shadow_offset=round(style.shadow_offset * scale),
+    )
+
+
 def build_caption_filter(
     words: list[WordTiming], style: CaptionStyle, *, time_offset_seconds: float = 0.0,
-    video_label: str = "outv", output_label: str = "capv",
+    video_label: str = "outv", output_label: str = "capv", scale: float = 1.0,
 ) -> str:
     """Builds the ffmpeg filter clause(s) compositing `words` as burned-
     in captions on top of `[{video_label}]` (the already-assembled
@@ -473,6 +487,7 @@ def build_caption_filter(
     duration), just without per-word reveal."""
     if not words:
         return f"[{video_label}]null[{output_label}]"
+    style = scale_caption_style(style, scale)
 
     if style.animation == "karaoke":
         word_groups = _group_words_by_gap(words)
@@ -613,7 +628,7 @@ def _build_karaoke_filter(
 
 def build_caption_filter_from_lines(
     lines: list[CaptionLine], style: CaptionStyle, *, time_offset_seconds: float = 0.0,
-    video_label: str = "outv", output_label: str = "capv",
+    video_label: str = "outv", output_label: str = "capv", scale: float = 1.0,
 ) -> str:
     """Builds the same drawtext-overlay filter clause as
     build_caption_filter(), but from person-EDITED CaptionLines rather
@@ -636,6 +651,7 @@ def build_caption_filter_from_lines(
 
     if not lines:
         return f"[{video_label}]null[{output_label}]"
+    style = scale_caption_style(style, scale)
 
     y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
     font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)

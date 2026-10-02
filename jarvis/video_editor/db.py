@@ -49,9 +49,25 @@ CREATE TABLE IF NOT EXISTS projects (
     timeline_data TEXT,
     media_items_data TEXT,
     export_format_last_used TEXT,
-    status TEXT NOT NULL DEFAULT 'created'
+    status TEXT NOT NULL DEFAULT 'created',
+    overlays_data TEXT
 );
 """
+
+_MIGRATIONS = (
+    "ALTER TABLE projects ADD COLUMN overlays_data TEXT",
+)
+# Columns added after this table's first release - a database created
+# before them has a `projects` table without these columns, which
+# CREATE TABLE IF NOT EXISTS above never touches. Each statement runs on
+# every connect; "duplicate column name" (already migrated) is expected
+# and ignored.
+#
+# overlays_data holds everything a project shows ON TOP of its timeline
+# (text overlays, stickers, caption style + edited lines, music track)
+# as one JSON object, written by jarvis.video_editor.storage
+# .save_overlays() - before this column existed none of it was saved,
+# so reopening a project silently lost every text/sticker/caption.
 # timeline_data holds one jarvis.video_editor.timeline.Timeline (as
 # JSON, via dataclasses.asdict()) - one "current" timeline per project,
 # overwritten in place on every save (not a history of past edits,
@@ -88,9 +104,12 @@ class VideoEditorProjectRecord:
     media_items_data: list[dict[str, Any]] | None
     export_format_last_used: str | None
     status: str
+    overlays_data: dict[str, Any] | None = None
 
 
-_SELECT_COLUMNS = "id, created_at, updated_at, name, timeline_data, media_items_data, export_format_last_used, status"
+_SELECT_COLUMNS = (
+    "id, created_at, updated_at, name, timeline_data, media_items_data, export_format_last_used, status, overlays_data"
+)
 
 
 def _row_to_record(row: tuple) -> VideoEditorProjectRecord:
@@ -99,6 +118,7 @@ def _row_to_record(row: tuple) -> VideoEditorProjectRecord:
         timeline_data=json.loads(row[4]) if row[4] else None,
         media_items_data=json.loads(row[5]) if row[5] else None,
         export_format_last_used=row[6], status=row[7],
+        overlays_data=json.loads(row[8]) if row[8] else None,
     )
 
 
@@ -109,6 +129,12 @@ def _connect() -> Iterator[sqlite3.Connection]:
     try:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(_SCHEMA)
+        for statement in _MIGRATIONS:
+            try:
+                conn.execute(statement)
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e):
+                    raise
         yield conn
         conn.commit()
     finally:
@@ -177,6 +203,18 @@ def save_media_items(project_id: str, media_items_data: list[dict[str, Any]]) ->
         conn.execute(
             "UPDATE projects SET media_items_data = ?, updated_at = ? WHERE id = ?",
             (json.dumps(media_items_data, ensure_ascii=False), _now_iso(), project_id),
+        )
+
+
+def save_overlays(project_id: str, overlays_data: dict[str, Any]) -> None:
+    """Stores this project's overlay layer (text overlays, stickers,
+    captions, music - see the overlays_data column comment above) as a
+    plain dict the caller already serialized. Touches ONLY this column
+    and updated_at."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE projects SET overlays_data = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(overlays_data, ensure_ascii=False), _now_iso(), project_id),
         )
 
 

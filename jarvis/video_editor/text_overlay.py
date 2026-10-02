@@ -26,7 +26,9 @@ caption_filter for video/audio respectively)."""
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 _DEFAULT_FONT_FILE = "C:/Windows/Fonts/arialbd.ttf"
@@ -92,6 +94,24 @@ TEXT_SLIDE_DIRECTION_CHOICES: tuple[TextSlideDirection, ...] = ("left", "right")
 _MIN_POSITION = 0.0
 _MAX_POSITION = 1.0
 
+ROTATABLE_TEXT_ANIMATIONS: tuple[TextAnimation, ...] = ("none", "fade")
+# drawtext cannot rotate text, so rotated text is exported as a Pillow-
+# rendered image composited with `overlay` (see
+# build_rotated_text_filters()). That path supports a plain or faded
+# appearance only - every other animation is a per-frame drawtext
+# expression with no image-overlay equivalent yet.
+
+REFERENCE_SHORT_SIDE_PX = 1080
+# font_size is in pixels of a 1080p export (the short side of every
+# 1080p canvas is 1080). text_scale_for() converts it for other
+# resolution tiers so a title takes the same share of the frame at
+# 720p, 1080p and 4K - before, the same font_size looked 1.5x bigger
+# in a 720p export than in a 1080p one, and half the size at 4K.
+
+
+def text_scale_for(canvas_width: int, canvas_height: int) -> float:
+    return min(canvas_width, canvas_height) / REFERENCE_SHORT_SIDE_PX
+
 
 class TextOverlayError(Exception):
     """Raised for an invalid TextOverlay (bad time window, position
@@ -128,6 +148,9 @@ class TextOverlay:
     speed: float = 1.0
     intensity: float = 1.0
     direction: TextSlideDirection = "left"
+    rotation_degrees: float = 0.0
+    """Clockwise, around the text's own center. Non-zero rotation is
+    only supported with ROTATABLE_TEXT_ANIMATIONS (see that constant)."""
     # Only meaningful for "slide_in"/"slide_out" - which off-screen side
     # the text eases in from / out toward. Ignored by every other
     # animation kind, same "unused field for most, real field for one
@@ -154,7 +177,18 @@ class TextOverlay:
             problems.append("Text overlay speed must be greater than zero.")
         if self.intensity <= 0.0:
             problems.append("Text overlay intensity must be greater than zero.")
+        if not (-360.0 <= self.rotation_degrees <= 360.0):
+            problems.append(f"Text overlay rotation {self.rotation_degrees} must be between -360 and 360 degrees.")
+        if self.is_rotated and self.animation not in ROTATABLE_TEXT_ANIMATIONS:
+            problems.append(
+                f"Rotated text supports only the {' / '.join(ROTATABLE_TEXT_ANIMATIONS)} animations "
+                f"(not '{self.animation}')."
+            )
         return problems
+
+    @property
+    def is_rotated(self) -> bool:
+        return self.rotation_degrees % 360.0 != 0.0
 
 
 def _escape_drawtext_text(text: str) -> str:
@@ -165,7 +199,7 @@ def _escape_drawtext_text(text: str) -> str:
 
 
 def build_text_overlay_filter(
-    overlays: list[TextOverlay], *, video_label: str = "outv", output_label: str = "textv",
+    overlays: list[TextOverlay], *, video_label: str = "outv", output_label: str = "textv", scale: float = 1.0,
 ) -> str:
     """Builds the ffmpeg filter clause(s) compositing every overlay in
     `overlays` on top of `[{video_label}]`, producing `[{output_label}]` -
@@ -182,6 +216,9 @@ def build_text_overlay_filter(
         if problems:
             raise TextOverlayError("; ".join(problems))
 
+    # Rotated overlays are composited separately as images - see
+    # build_rotated_text_filters().
+    overlays = [_scaled(overlay, scale) for overlay in overlays if not overlay.is_rotated]
     if not overlays:
         return f"[{video_label}]null[{output_label}]"
 
@@ -207,6 +244,74 @@ def build_text_overlay_filter(
 
     chain = ",".join(clauses)
     return f"[{video_label}]{chain}[{output_label}]"
+
+
+def _scaled(overlay: TextOverlay, scale: float) -> TextOverlay:
+    if scale == 1.0:
+        return overlay
+    return dataclasses.replace(overlay, font_size=max(1, round(overlay.font_size * scale)))
+
+
+def build_rotated_text_filters(
+    overlays: list[TextOverlay], *, canvas_width: int, canvas_height: int, cwd: Path,
+    video_label: str, first_input_index: int, scale: float = 1.0,
+) -> tuple[list[tuple[list[str], str]], str]:
+    """Builds one (extra_input_args, filter_clause) pair per ROTATED
+    overlay in `overlays` (unrotated ones are skipped - they stay on
+    build_text_overlay_filter()'s drawtext path), in the same tuple
+    shape jarvis.video_editor.stickers.build_sticker_filter() returns,
+    so export_timeline()'s `sticker_filters` list carries them.
+
+    Each rotated text is rendered once with Pillow
+    (jarvis.video_editor.text_render - the same renderer the live
+    preview uses), rotated clockwise around its own center, saved as a
+    PNG under `cwd` and overlaid centered where the unrotated text's
+    center would be. Returns (filters, final_video_label)."""
+    from PIL import Image
+
+    from jarvis.video_editor import text_render
+
+    for overlay in overlays:
+        problems = overlay.validate()
+        if problems:
+            raise TextOverlayError("; ".join(problems))
+
+    filters: list[tuple[list[str], str]] = []
+    current_label = video_label
+    input_index = first_input_index
+    for n, overlay in enumerate(o for o in overlays if o.is_rotated):
+        font = text_render.load_font(_DEFAULT_FONT_FILE, overlay.font_size * scale)
+        fill = text_render.parse_color(overlay.color)
+        block, metrics = text_render.render_text_block(overlay.text, font=font, fill=fill)
+        rotated = block.rotate(-overlay.rotation_degrees, expand=True, resample=Image.Resampling.BICUBIC)
+        image_path = cwd / f"_rotated_text_{n}.png"
+        cwd.mkdir(parents=True, exist_ok=True)
+        rotated.save(image_path, "PNG")
+
+        center_x = (canvas_width - metrics.width) * overlay.x_fraction + metrics.width / 2
+        center_y = (canvas_height - metrics.height) * overlay.y_fraction + metrics.height / 2
+        start, end = overlay.start_seconds, overlay.end_seconds
+
+        alpha_stage = ""
+        if overlay.animation == "fade":
+            fade_out_start = max(start, end - overlay.fade_seconds)
+            alpha_stage = (
+                f",fade=t=in:st={start}:d={overlay.fade_seconds}:alpha=1"
+                f",fade=t=out:st={fade_out_start}:d={overlay.fade_seconds}:alpha=1"
+            )
+        text_label = f"rtext{n}"
+        output_label = f"rtextv{n}"
+        clause = (
+            f"[{input_index}:v]format=rgba{alpha_stage}[{text_label}];"
+            f"[{current_label}][{text_label}]overlay=x='{center_x}-overlay_w/2':y='{center_y}-overlay_h/2':"
+            f"enable='between(t,{start},{end})'[{output_label}]"
+        )
+        # -loop 1 turns the still PNG into a real stream with timestamps
+        # up to `end`, which the fade filter needs to ramp over time.
+        filters.append((["-loop", "1", "-framerate", "30", "-t", f"{end}", "-i", str(image_path)], clause))
+        current_label = output_label
+        input_index += 1
+    return filters, current_label
 
 
 def _plain_or_fade_clause(overlay: TextOverlay, *, font_file_arg: str) -> str:

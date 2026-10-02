@@ -193,7 +193,15 @@ class StickerInstance:
 
 
 def render_builtin_sticker(shape: StickerShape, *, output_path: Path, tint: tuple[int, int, int] | None = None) -> None:
-    """Renders `shape` as a real, transparent PNG via Pillow's own
+    """Writes builtin_sticker_image(shape, tint=tint) to `output_path`
+    as a PNG - the file ffmpeg's `overlay` input reads at export."""
+    image = builtin_sticker_image(shape, tint=tint)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_path, "PNG")
+
+
+def builtin_sticker_image(shape: StickerShape, *, tint: tuple[int, int, int] | None = None):
+    """Draws `shape` as a real, transparent RGBA image via Pillow's own
     ImageDraw - the exact same drawing library jarvis.design_studio
     .render/.reel_generator.scene_render already use elsewhere in this
     codebase for drawn (non-photographic) graphics, applied here to a
@@ -445,8 +453,7 @@ def render_builtin_sticker(shape: StickerShape, *, output_path: Path, tint: tupl
             w = rng.uniform(size * 0.04, size * 0.08)
             draw.rectangle([x, y, x + w, y + w], fill=(*color, 230))
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output_path, "PNG")
+    return image
 
 
 def _star_points(cx: float, cy: float, outer_r: float, inner_r: float, points: int) -> list[tuple[float, float]]:
@@ -467,9 +474,16 @@ def _animation_overlay_expressions(
     position expressions implementing `sticker.animation`. `t` is
     ffmpeg's own current-timestamp variable (seconds, absolute - not
     relative to the sticker's own start) - every expression below
-    anchors to `sticker.start_seconds` explicitly for this reason."""
-    base_x = sticker.x_fraction * canvas_width - sticker_width / 2
-    base_y = sticker.y_fraction * canvas_height - sticker_height / 2
+    anchors to `sticker.start_seconds` explicitly for this reason.
+
+    The sticker is centered on (x_fraction, y_fraction) using overlay's
+    own `overlay_w`/`overlay_h` (the REAL composited size) rather than
+    the pre-rotation size: `rotate` expands the image to fit the turned
+    corners, and centering on the unrotated size shifted every rotated
+    sticker down/right of where it was placed. Unrotated stickers are
+    unaffected (overlay_w == sticker_width)."""
+    base_x = f"{sticker.x_fraction * canvas_width}-overlay_w/2"
+    base_y = f"{sticker.y_fraction * canvas_height}-overlay_h/2"
     start = sticker.start_seconds
 
     if sticker.animation == "pop_in":
@@ -489,6 +503,20 @@ def _animation_overlay_expressions(
     return (f"{base_x}", f"{base_y}")
 
 
+_TIME_DRIVEN_ANIMATIONS = ("spin", "blink", "fade_in_out")
+
+
+def sticker_fade_seconds(sticker: StickerInstance) -> float:
+    """The "fade_in_out" ramp length - shared with
+    jarvis.video_editor.preview_compositor so the live preview fades
+    over exactly the same window the export does."""
+    return max(0.05, min(0.4, (sticker.end_seconds - sticker.start_seconds) / 2))
+
+
+def is_animated_gif(path: Path | None) -> bool:
+    return path is not None and path.suffix.lower() == ".gif"
+
+
 def _alpha_clause(sticker: StickerInstance, *, label_in: str, label_out: str) -> str:
     """Builds the opacity-handling stage of the filter chain -
     `colorchannelmixer`'s own `aa=` option does NOT support time-
@@ -504,20 +532,26 @@ def _alpha_clause(sticker: StickerInstance, *, label_in: str, label_out: str) ->
     A constant opacity (every other animation) stays on the cheaper,
     simpler `colorchannelmixer=aa=<constant>` stage."""
     base = sticker.opacity
-    base_255 = round(base * 255)
 
     if sticker.animation == "fade_in_out":
         start, end = sticker.start_seconds, sticker.end_seconds
-        fade = max(0.05, min(0.4, (end - start) / 2))
+        fade = sticker_fade_seconds(sticker)
+        # The fades scale whatever alpha the sticker already has, so the
+        # constant opacity is applied first - without it a faded sticker
+        # ignored its own opacity setting entirely.
+        opacity_stage = f"colorchannelmixer=aa={base}," if base != 1.0 else ""
         return (
-            f"[{label_in}]fade=t=in:st={start}:d={fade}:alpha=1,"
+            f"[{label_in}]{opacity_stage}fade=t=in:st={start}:d={fade}:alpha=1,"
             f"fade=t=out:st={end - fade}:d={fade}:alpha=1[{label_out}]"
         )
     if sticker.animation == "blink":
+        # Scales the sticker's OWN per-pixel alpha - a constant `a=`
+        # here used to make every transparent pixel opaque, so a
+        # blinking heart showed up as a solid square.
         start = sticker.start_seconds
         return (
             f"[{label_in}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-            f"a='if(lt(mod(T-{start},0.6),0.3),{base_255},{round(base_255 * 0.2)})'[{label_out}]"
+            f"a='alpha(X,Y)*if(lt(mod(T-{start},0.6),0.3),{base},{base * 0.2})'[{label_out}]"
         )
     return f"[{label_in}]colorchannelmixer=aa={base}[{label_out}]"
 
@@ -568,12 +602,32 @@ def build_sticker_filter(
             f";[{alpha_label}]rotate={angle_expr}:c=none:ow=rotw(iw):oh=roth(ih)[{rotated_label}]"
         )
 
+    # An animated GIF loops for as long as the sticker is visible and
+    # starts playing at the sticker's own start time. Before, the GIF
+    # stream started at t=0 of the whole video and played once, so a
+    # GIF placed at 5s had usually already finished (frozen on its last
+    # frame) by the time it appeared. -ignore_loop 0 loops it forever;
+    # -t bounds that infinite input to the sticker's own duration so
+    # ffmpeg still terminates; setpts shifts its first frame to `start`.
+    gif_prefix = ""
+    extra_input_args = ["-i", str(image_path)]
+    if sticker.animation in _TIME_DRIVEN_ANIMATIONS:
+        # A plain `-i image.png` is ONE frame at t=0 that overlay keeps
+        # repeating, so `rotate`'s t, `geq`'s T and `fade` all saw t=0
+        # forever: "spin" froze at one angle, "blink" never blinked and
+        # "fade_in_out" stayed at its t=0 alpha. -loop 1 makes the image
+        # a real stream whose timestamps follow the timeline's own.
+        extra_input_args = ["-loop", "1", "-framerate", "30", "-t", f"{sticker.end_seconds}", "-i", str(image_path)]
+    if is_animated_gif(sticker.custom_path):
+        duration = sticker.end_seconds - sticker.start_seconds
+        extra_input_args = ["-ignore_loop", "0", "-t", f"{duration}", "-i", str(image_path)]
+        gif_prefix = f"setpts=PTS-STARTPTS+{sticker.start_seconds}/TB,"
+
     filter_clause = (
-        f"[{input_index}:v]scale={sticker_px}:{sticker_px},format=rgba[{scaled_label}];"
+        f"[{input_index}:v]{gif_prefix}scale={sticker_px}:{sticker_px},format=rgba[{scaled_label}];"
         f"{alpha_clause}"
         f"{rotate_clause};"
         f"[{video_label}][{rotated_label}]overlay=x='{x_expr}':y='{y_expr}':"
         f"enable='between(t,{sticker.start_seconds},{sticker.end_seconds})'[{output_label}]"
     )
-    extra_input_args = ["-i", str(image_path)]
     return extra_input_args, filter_clause

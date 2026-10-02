@@ -236,3 +236,83 @@ def test_real_export_with_sticker_is_visually_different_from_plain(tmp_path):
         capture_output=True, timeout=15, check=True,
     )
     assert Image.open(frame_stickered).tobytes() != Image.open(frame_plain).tobytes()
+
+
+def _overlay_on_blue(tmp_path, sticker, *, canvas=(640, 360), duration=3):
+    """Runs one sticker through a real ffmpeg overlay on a plain blue
+    clip; returns a function extracting the frame at a given time."""
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=blue:s={canvas[0]}x{canvas[1]}:r=30:d={duration}",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)],
+        capture_output=True, timeout=30, check=True,
+    )
+    extra_args, clause = build_sticker_filter(
+        sticker, canvas_width=canvas[0], canvas_height=canvas[1], cwd=tmp_path, video_label="base",
+        output_label="stickered", input_index=1,
+    )
+    out = tmp_path / "stickered.mp4"
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(clip), *extra_args, "-filter_complex", f"[0:v]null[base];{clause}",
+         "-map", "[stickered]", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)],
+        capture_output=True, text=True, timeout=60, cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr[-600:]
+
+    def frame_at(t: float) -> Image.Image:
+        png = tmp_path / f"frame_{t}.png"
+        subprocess.run(["ffmpeg", "-y", "-ss", str(t), "-i", str(out), "-frames:v", "1", str(png)],
+                       capture_output=True, timeout=15, check=True)
+        return Image.open(png).convert("RGB")
+
+    return frame_at
+
+
+def _non_blue_bbox(image: Image.Image):
+    return image.getchannel("R").point(lambda v: 255 if v > 80 else 0).getbbox()
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_rotated_sticker_stays_centered_on_its_position(tmp_path):
+    # Regression: the rotate stage enlarges the image to fit the turned
+    # corners, and the overlay position used to center the UNROTATED
+    # size - every rotated sticker drifted down/right of where it was put.
+    sticker = StickerInstance(start_seconds=0.0, end_seconds=3.0, shape="frame_square", x_fraction=0.5,
+                              y_fraction=0.5, size_fraction=0.3, rotation_degrees=45, animation="none",
+                              tint=(255, 255, 255))
+    left, top, right, bottom = _non_blue_bbox(_overlay_on_blue(tmp_path, sticker)(1.0))
+    assert abs((left + right) / 2 - 320) <= 4
+    assert abs((top + bottom) / 2 - 180) <= 4
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_spin_and_blink_change_over_time_in_a_real_export(tmp_path):
+    # Regression: a still sticker image used to be ONE frame at t=0, so
+    # time-driven animations evaluated t=0 forever - "spin" never turned
+    # and "blink" never blinked.
+    spin = StickerInstance(start_seconds=0.0, end_seconds=3.0, shape="arrow", size_fraction=0.4, animation="spin")
+    (tmp_path / "spin").mkdir()
+    frame_at = _overlay_on_blue(tmp_path / "spin", spin)
+    assert frame_at(0.5).tobytes() != frame_at(0.62).tobytes()
+
+    blink = StickerInstance(start_seconds=0.0, end_seconds=3.0, shape="heart", size_fraction=0.4, animation="blink")
+    (tmp_path / "blink").mkdir()
+    frame_at = _overlay_on_blue(tmp_path / "blink", blink)
+    bright, dim = frame_at(0.1), frame_at(0.4)
+    assert bright.tobytes() != dim.tobytes()
+    # The heart's transparent corners must stay transparent (blink used
+    # to turn the whole square opaque).
+    assert bright.getpixel((320 - 120, 180 - 120))[2] > 200
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_animated_gif_sticker_starts_at_its_own_start_and_loops(tmp_path):
+    frames = [Image.new("RGB", (40, 40), color) for color in ((255, 0, 0), (0, 255, 0))]
+    gif_path = tmp_path / "anim.gif"
+    frames[0].save(gif_path, save_all=True, append_images=frames[1:], duration=200, loop=0)
+    sticker = StickerInstance(start_seconds=1.5, end_seconds=3.0, custom_path=gif_path, x_fraction=0.5,
+                              y_fraction=0.5, size_fraction=0.2, animation="none")
+    frame_at = _overlay_on_blue(tmp_path, sticker)
+    assert frame_at(1.55).getpixel((320, 180))[0] > 200  # first (red) frame at the sticker's start
+    assert frame_at(1.75).getpixel((320, 180))[1] > 200  # second (green) frame
+    assert frame_at(1.95).getpixel((320, 180))[0] > 200  # looped back to red

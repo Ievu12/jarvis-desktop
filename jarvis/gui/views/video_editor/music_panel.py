@@ -73,10 +73,13 @@ class MusicPanel(ctk.CTkFrame):
         if path:
             self._on_file_chosen(Path(path))
 
-    def set_imported_track(self, track_path: Path, *, duration_seconds: float | None) -> None:
+    def set_imported_track(
+        self, track_path: Path, *, duration_seconds: float | None, track: MusicTrack | None = None,
+    ) -> None:
         """Called by the owning dashboard once the chosen file has been
         copied into the project and probed - renders the real
-        trim/volume/fade controls for it."""
+        trim/volume/fade controls for it. `track` pre-fills them with a
+        saved project's own settings instead of the defaults."""
         self._track_path = track_path
         for child in self._controls_container.winfo_children():
             child.destroy()
@@ -91,24 +94,24 @@ class MusicPanel(ctk.CTkFrame):
         row1 = ctk.CTkFrame(self._controls_container, fg_color="transparent")
         row1.pack(fill="x", pady=(0, theme.SPACE_XS))
         start_entry = ctk.CTkEntry(row1, width=70)
-        start_entry.insert(0, "0.0")
+        start_entry.insert(0, f"{track.trim_start_seconds:g}" if track else "0.0")
         ctk.CTkLabel(row1, text="Start (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         start_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         volume_entry = ctk.CTkEntry(row1, width=60)
-        volume_entry.insert(0, "1.0")
+        volume_entry.insert(0, f"{track.volume:g}" if track else "1.0")
         ctk.CTkLabel(row1, text="Volume:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         volume_entry.pack(side="left")
 
         row2 = ctk.CTkFrame(self._controls_container, fg_color="transparent")
         row2.pack(fill="x", pady=(0, theme.SPACE_XS))
         fade_in_entry = ctk.CTkEntry(row2, width=60)
-        fade_in_entry.insert(0, "1.0")
+        fade_in_entry.insert(0, f"{track.fade_in_seconds:g}" if track else "1.0")
         ctk.CTkLabel(row2, text="Fade in (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         fade_in_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         fade_out_entry = ctk.CTkEntry(row2, width=60)
-        fade_out_entry.insert(0, "1.0")
+        fade_out_entry.insert(0, f"{track.fade_out_seconds:g}" if track else "1.0")
         ctk.CTkLabel(row2, text="Fade out (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         fade_out_entry.pack(side="left")
 
@@ -122,18 +125,19 @@ class MusicPanel(ctk.CTkFrame):
                 fade_out = float(fade_out_entry.get())
             except ValueError:
                 return
-            track = MusicTrack(
+            new_track = MusicTrack(
                 source_path=track_path, trim_start_seconds=start, volume=volume,
                 fade_in_seconds=fade_in, fade_out_seconds=fade_out,
+                trim_end_seconds=track.trim_end_seconds if track else None,
             )
-            problems = validate_music_track(track)
+            problems = validate_music_track(new_track)
             if problems:
                 error_label.configure(text=f"⚠️ {problems[0]}")
                 error_label.pack(anchor="w", pady=(theme.SPACE_XS, 0))
                 self._on_track_changed(None)
                 return
             error_label.pack_forget()
-            self._on_track_changed(track)
+            self._on_track_changed(new_track)
 
         for entry in (start_entry, volume_entry, fade_in_entry, fade_out_entry):
             entry.bind("<FocusOut>", on_change)
@@ -205,8 +209,13 @@ class MusicPanel(ctk.CTkFrame):
             ).pack(anchor="w")
 
     def _on_remove_clicked(self) -> None:
+        self.clear_track()
+        self._on_track_changed(None)
+
+    def clear_track(self) -> None:
+        """No track shown, without emitting - used when another project
+        (with no music) is opened."""
         self._track_path = None
         for child in self._controls_container.winfo_children():
             child.destroy()
         self._controls_container.pack_forget()
-        self._on_track_changed(None)

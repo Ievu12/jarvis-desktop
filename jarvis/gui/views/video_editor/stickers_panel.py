@@ -232,6 +232,32 @@ class StickersPanel(ctk.CTkFrame):
         self._library_state = sl.delete_collection(name)
         self._render_collections()
 
+    # --- owning-dashboard API (edits made in the interactive preview) ------------------------
+
+    def add_sticker(self, sticker: StickerInstance) -> None:
+        self._stickers.append(sticker)
+        self._render()
+        self._emit()
+
+    def set_stickers(self, stickers: list[StickerInstance]) -> None:
+        """Replaces every row without emitting (see
+        TextOverlayPanel.set_overlays())."""
+        self._stickers = list(stickers)
+        self._render()
+
+    def replace_sticker(self, old: StickerInstance, new: StickerInstance) -> None:
+        for index, sticker in enumerate(self._stickers):
+            if sticker == old:
+                self._stickers[index] = new
+                self._render()
+                return
+
+    def remove_sticker(self, sticker: StickerInstance) -> None:
+        if sticker in self._stickers:
+            self._stickers.remove(sticker)
+            self._render()
+            self._emit()
+
     def _on_add_builtin_clicked(self) -> None:
         self._stickers.append(StickerInstance(start_seconds=0.0, end_seconds=2.0, shape="heart"))
         self._render()
