@@ -85,6 +85,7 @@ class TrackTimelinePanel(ctk.CTkFrame):
         self._media_items: dict[str, MediaItem] = {}
         self._bars: dict[str, list[tl.TrackBar]] = {track: [] for track in tl.TRACKS}
         self._total = 0.0
+        self._transitions: list[tuple[int, float, float, str]] = []
         self._playhead = 0.0
         self._px_per_second = 40.0
         self._fit = True
@@ -174,6 +175,7 @@ class TrackTimelinePanel(ctk.CTkFrame):
         self._media_items = media_items
         self._bars = tl.build_track_bars(state, media_items)
         self._total = tl.total_duration(state, media_items)
+        self._transitions = tl.transition_markers(state, media_items)
         if self._selected is not None and self._bar(self._selected) is None:
             self._selected = None
         if self._fit:
@@ -306,6 +308,19 @@ class TrackTimelinePanel(ctk.CTkFrame):
                 canvas.create_line(end_x, top, end_x, top + LANE_HEIGHT, fill=theme.BORDER_SUBTLE)
             for bar in self._bars[track]:
                 self._draw_bar(bar, top)
+
+        # Transitions: where two video bars overlap, with a ⇄ mark.
+        video_top = _lane_top(tl.TRACKS.index("video"))
+        for _index, start, end, kind in self._transitions:
+            x1, x2 = self.x_for(start), max(self.x_for(end), self.x_for(start) + 8)
+            canvas.create_rectangle(
+                x1, video_top + 3, x2, video_top + LANE_HEIGHT - 3, fill="#ffffff", outline="#ffffff",
+                stipple="gray25", tags=("transition",),
+            )
+            canvas.create_text(
+                (x1 + x2) / 2, video_top + LANE_HEIGHT / 2, text="⇄", fill="#ffffff",
+                font=(theme.FONT_FAMILY_BODY, 10, "bold"), tags=("transition",),
+            )
 
         if self._drag is not None and self._drag.get("ghost") is not None:
             ghost_track, start, end = self._drag["ghost"]

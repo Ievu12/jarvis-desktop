@@ -14,7 +14,7 @@ import dataclasses
 from dataclasses import dataclass
 
 from jarvis.video_editor.editor_state import EditorState
-from jarvis.video_editor.effects import EffectSpec
+from jarvis.video_editor.effects import LOOK_LABELS, EffectSpec
 from jarvis.video_editor.media_import import MediaItem
 from jarvis.video_editor.playback import assembled_duration, timeline_segments
 from jarvis.video_editor.timeline import TimelineItem, TimelineStill, TransitionSpec
@@ -61,6 +61,8 @@ def effect_label(effect: EffectSpec) -> str | None:
         parts.append("Išblukimas")
     if effect.brightness != 0.0 or effect.contrast != 1.0 or effect.saturation != 1.0:
         parts.append("Spalvos")
+    if effect.look != "none" and effect.look_intensity > 0.0:
+        parts.insert(0, f"{LOOK_LABELS[effect.look]} {round(effect.look_intensity * 100)}%")
     return " + ".join(parts) if parts else None
 
 
@@ -257,6 +259,78 @@ def split_at(
         if segment.start_seconds < t < segment.end_seconds:
             return split_item(state, segment.index, t - segment.start_seconds, new_clip_id=new_clip_id)
     return None
+
+
+# --- filters and transitions ----------------------------------------------------------------------
+
+TRANSITION_LABELS: dict[str, str] = {
+    "cut": "Be perėjimo",
+    "fade": "Užtemimas",
+    "dissolve": "Ištirpimas",
+    "slide_left": "Slinkimas į kairę",
+    "slide_right": "Slinkimas į dešinę",
+}
+MIN_TRANSITION_SECONDS = 0.2
+MAX_TRANSITION_SECONDS = 2.0
+
+
+def max_transition_seconds(state: EditorState, index: int) -> float:
+    """The longest transition out of item `index`: the crossfade
+    overlaps both neighbors, so it must stay shorter than either."""
+    items = state.timeline.items
+    if not (0 <= index < len(items) - 1):
+        return 0.0
+    shortest = min(items[index].on_screen_duration_seconds, items[index + 1].on_screen_duration_seconds)
+    return round(max(0.0, min(MAX_TRANSITION_SECONDS, shortest * 0.9)), 2)
+
+
+def set_transition(state: EditorState, index: int, kind: str, duration: float) -> EditorState:
+    """Sets the transition from item `index` into the next one (a no-op
+    for the last item). The duration is kept within what both clips
+    allow; a "cut" always has none."""
+    items = list(state.timeline.items)
+    if not (0 <= index < len(items) - 1):
+        return state
+    limit = max_transition_seconds(state, index)
+    if kind == "cut" or limit < MIN_TRANSITION_SECONDS / 2:
+        spec = TransitionSpec()
+    else:
+        spec = TransitionSpec(kind=kind, duration_seconds=round(max(min(duration, limit), 0.05), 2))
+    items[index] = dataclasses.replace(items[index], transition_out=spec)
+    return _with_items(state, items)
+
+
+def set_transition_everywhere(state: EditorState, kind: str, duration: float) -> EditorState:
+    for index in range(len(state.timeline.items) - 1):
+        state = set_transition(state, index, kind, duration)
+    return state
+
+
+def set_look(state: EditorState, index: int | None, look: str, intensity: float) -> EditorState:
+    """Puts the filter `look` at `intensity` (0-1) on item `index`, or
+    on every item when `index` is None. Other effect settings stay."""
+    items = list(state.timeline.items)
+    targets = range(len(items)) if index is None else [index]
+    intensity = round(max(0.0, min(1.0, intensity)), 2)
+    for n in targets:
+        if 0 <= n < len(items):
+            effect = dataclasses.replace(items[n].effect, look=look, look_intensity=intensity)
+            items[n] = dataclasses.replace(items[n], effect=effect)
+    return _with_items(state, items)
+
+
+def transition_markers(
+    state: EditorState, media_items: dict[str, MediaItem],
+) -> list[tuple[int, float, float, str]]:
+    """`(index, start, end, kind)` for every non-cut transition on the
+    assembled timeline: where the two clips overlap."""
+    markers = []
+    segments = timeline_segments(state.timeline, media_items)
+    for segment, following in zip(segments, segments[1:]):
+        transition = segment.item.transition_out
+        if transition.kind != "cut":
+            markers.append((segment.index, following.start_seconds, segment.end_seconds, transition.kind))
+    return markers
 
 
 # --- delete / duplicate (any track) ----------------------------------------------------------------

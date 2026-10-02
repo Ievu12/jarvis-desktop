@@ -269,7 +269,16 @@ def test_text_preview_matches_export(parity_env, parity_font, overlay):
     (StickerInstance(start_seconds=0.5, end_seconds=3, shape="sun", size_fraction=0.25, animation="blink"), 0.7),
     (StickerInstance(start_seconds=0.5, end_seconds=3, shape="sun", size_fraction=0.25, opacity=0.7,
                      animation="fade_in_out"), 0.7),
-], ids=["plain", "rotated-translucent", "spin", "blink", "fade"])
+    (StickerInstance(start_seconds=0.5, end_seconds=3, shape="heart", size_fraction=0.25, animation="bounce",
+                     animation_speed=2.0, animation_intensity=2.0), 0.8),
+    (StickerInstance(start_seconds=0.5, end_seconds=3, shape="arrow", size_fraction=0.25, animation="spin",
+                     animation_speed=0.5), 1.2),
+    (StickerInstance(start_seconds=0.5, end_seconds=3, shape="sun", size_fraction=0.25, animation="blink",
+                     animation_speed=2.0, animation_intensity=0.5), 0.7),
+    (StickerInstance(start_seconds=0.5, end_seconds=3, shape="star", size_fraction=0.3, animation="float",
+                     fade_in_seconds=1.0, fade_out_seconds=0.5), 1.0),
+], ids=["plain", "rotated-translucent", "spin", "blink", "fade", "bounce-fast-strong", "spin-slow",
+        "blink-fast-soft", "float-appearing"])
 def test_sticker_preview_matches_export(parity_env, sticker, t):
     exact, preview, base = _export_vs_preview(parity_env, t=t, stickers=[sticker])
     _assert_matches(exact, preview, base)
@@ -290,3 +299,38 @@ def test_compose_draws_on_a_copy():
     pc.compose(base, pc.Scene(text_overlays=(TextOverlay(text="X", start_seconds=0, end_seconds=1),)),
                t=0.5, canvas_width=CANVAS_W, canvas_height=CANVAS_H)
     assert ImageChops.difference(base, snapshot).getbbox() is None
+
+
+@pytest.mark.parametrize("look", ["moody", "golden_hour", "y2k", "vintage", "cinematic", "natural"])
+def test_filter_look_in_live_playback_matches_export(parity_env, look):
+    """The playback decoder and the export run the same filter chain, so
+    a frame with a look looks the same in both (and differs from none)."""
+    import dataclasses
+
+    from jarvis.video_editor.effects import EffectSpec
+    from jarvis.video_editor.playback import decode_single_frame
+
+    work, timeline, media_items = parity_env
+    graded = dataclasses.replace(timeline, items=(
+        dataclasses.replace(timeline.items[0], effect=EffectSpec(look=look, look_intensity=0.8)),
+    ))
+    export_format = resolve_export_format("9:16", "1080p")
+    path = render_preview_frame(graded, media_items, export_format=export_format, timestamp_seconds=1.0,
+                                filters=PreviewFilters(), cwd=work)
+    with Image.open(path) as image:
+        exact = image.convert("RGB").resize((360, 640), Image.Resampling.BILINEAR)
+    live = decode_single_frame(graded, media_items, t=1.0, width=360, height=640)
+    plain = decode_single_frame(timeline, media_items, t=1.0, width=360, height=640)
+
+    def mean_difference(a, b):
+        diff = ImageChops.difference(a, b).convert("L")
+        return sum(diff.histogram()[v] * v for v in range(256)) / (diff.width * diff.height)
+
+    def strongest_channel_shift(a, b):
+        return max(
+            sum(h * v for v, h in enumerate(channel.histogram())) / (a.width * a.height)
+            for channel in ImageChops.difference(a, b).split()
+        )
+
+    assert mean_difference(live, exact) <= 4.0
+    assert strongest_channel_shift(live, plain) >= 3.0

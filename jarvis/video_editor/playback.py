@@ -162,9 +162,7 @@ def build_decode_command(
         input_args = ["-loop", "1", "-t", f"{still_length:.3f}", "-i", path]
         chain = f"[0:v]{_scale_pad_filter(width, height, fps=fps)}[raw]"
 
-    has_effect = time_dependent or (
-        item.effect.brightness != 0.0 or item.effect.contrast != 1.0 or item.effect.saturation != 1.0
-    )
+    has_effect = not item.effect.is_identity
     if has_effect:
         chain += ";" + build_segment_effect_filter(
             item.effect, width=width, height=height, duration_seconds=item.on_screen_duration_seconds,
@@ -290,9 +288,19 @@ def decode_single_frame(
     if ffmpeg is None:
         raise PlaybackError("FFmpeg was not found on PATH.")
     segments = timeline_segments(timeline, media_items)
-    segment = segment_at(segments, t)
-    if segment is None:
+    showing = segments_showing(segments, t)
+    if not showing:
         raise PlaybackError("The timeline has nothing to show yet.")
+    frames = [_decode_one(ffmpeg, segment, t=t, width=width, height=height) for segment in showing]
+    if len(frames) == 1:
+        return frames[0]
+    outgoing, incoming = showing
+    return transition_frame(
+        frames[0], frames[1], outgoing.item.transition_out.kind, transition_progress(outgoing, incoming, t),
+    )
+
+
+def _decode_one(ffmpeg: str, segment: TimelineSegment, *, t: float, width: int, height: int) -> Image.Image:
     local = min(max(0.0, t - segment.start_seconds), max(0.0, segment.duration_seconds - 1 / PREVIEW_FPS))
     command = build_decode_command(ffmpeg, segment, local_seconds=local, width=width, height=height, frame_count=1)
     try:
@@ -307,6 +315,47 @@ def decode_single_frame(
         message = result.stderr.decode("utf-8", "replace").strip()[-300:]
         raise PlaybackError(f"Couldn't decode the preview frame. {message}".strip())
     return Image.frombytes("RGB", (width, height), result.stdout[:expected])
+
+
+def render_look_previews(
+    image: Image.Image, looks: tuple[str, ...], *, intensity: float = 1.0, ffmpeg: str | None = None,
+) -> dict[str, Image.Image]:
+    """`image` graded by each filter look in `looks` (the Filters
+    library's thumbnails), through the same `build_segment_effect_filter`
+    the export uses. Blocking: call it from a background thread. A look
+    that fails to render is left out of the result."""
+    from jarvis.video_editor.effects import EffectSpec
+
+    ffmpeg = ffmpeg or shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise PlaybackError("FFmpeg was not found on PATH.")
+    image = image.convert("RGB")
+    width, height = image.size
+    raw = image.tobytes()
+    previews: dict[str, Image.Image] = {}
+    for look in looks:
+        if look == "none":
+            previews[look] = image.copy()
+            continue
+        graph = build_segment_effect_filter(
+            EffectSpec(look=look, look_intensity=intensity), width=width, height=height,
+            duration_seconds=1.0, fps=PREVIEW_FPS, video_label="[0:v]", output_label="out",
+        )
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", f"{width}x{height}", "-i", "-", "-filter_complex", graph, "-map", "[out]",
+            "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ]
+        try:
+            result = subprocess.run(
+                command, input=raw, capture_output=True, timeout=_SINGLE_FRAME_TIMEOUT_SECONDS, check=False,
+                creationflags=_NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        if result.returncode == 0 and len(result.stdout) >= len(raw):
+            previews[look] = Image.frombytes("RGB", (width, height), result.stdout[:len(raw)])
+    return previews
 
 
 class AudioPlayer:
@@ -392,6 +441,10 @@ class PlaybackEngine:
     """Play/pause/seek state for one timeline. GUI-agnostic: the owner
     calls tick() on a timer and paints whatever frame it returns.
 
+    One decode stream per segment that is on screen (two during a
+    transition, blended like the export's xfade) plus the next segment,
+    opened shortly before it's needed.
+
     `clock` and `stream_factory` are injectable so tests can drive it
     deterministically without real time or real ffmpeg."""
 
@@ -413,10 +466,8 @@ class PlaybackEngine:
         self.playing = False
         self._play_started_at = 0.0
         self._play_started_position = 0.0
-        self._stream: FrameStream | None = None
-        self._stream_segment: TimelineSegment | None = None
-        self._next_stream: FrameStream | None = None
-        self._next_segment: TimelineSegment | None = None
+        self._streams: dict[int, FrameStream] = {}
+        self._last_frames: dict[int, Image.Image] = {}
         self.set_timeline(timeline, media_items)
 
     @property
@@ -459,7 +510,7 @@ class PlaybackEngine:
             self._position = 0.0  # play again from the start after reaching the end
         self.playing = True
         self._play_started_position = self._position
-        self._start_stream_at(self._position)
+        self._sync_streams(self._position)
         if self._audio is not None and self._audio_path is not None:
             self._audio.play(self._audio_path, from_seconds=self._position)
         self._play_started_at = self._clock()
@@ -498,25 +549,23 @@ class PlaybackEngine:
                 self._audio.stop()
             return None
 
-        segment = segment_at(self._segments, t)
-        if segment is not None and segment is not self._stream_segment:
-            if self._next_segment is segment and self._next_stream is not None:
-                self._replace_stream(self._next_stream, segment)
-                self._next_stream = self._next_segment = None
-            else:
-                self._start_stream_at(t)
-
-        # Start decoding the next segment shortly before it's needed so
-        # the switch doesn't stall on ffmpeg's startup.
-        if self._stream_segment is not None and self._next_stream is None:
-            following = self._segment_after(self._stream_segment)
-            if following is not None and following.start_seconds - t < 0.75:
-                self._next_segment = following
-                self._next_stream = self._open_stream(following, local_seconds=0.0)
-
-        if self._stream is None:
+        showing = self._sync_streams(t)
+        updated = False
+        for segment in showing:
+            stream = self._streams.get(segment.index)
+            frame = stream.frame_for(t) if stream is not None else None
+            if frame is not None:
+                self._last_frames[segment.index] = frame
+                updated = True
+        if not updated:
             return None
-        return self._stream.frame_for(t)
+        if len(showing) == 1:
+            return self._last_frames.get(showing[0].index)
+        outgoing, incoming = showing[0], showing[1]
+        first, second = self._last_frames.get(outgoing.index), self._last_frames.get(incoming.index)
+        if first is None or second is None:
+            return second or first
+        return transition_frame(first, second, outgoing.item.transition_out.kind, transition_progress(outgoing, incoming, t))
 
     def close(self) -> None:
         self.pause()
@@ -524,11 +573,23 @@ class PlaybackEngine:
 
     # --- internals ------------------------------------------------------------------------
 
-    def _segment_after(self, segment: TimelineSegment) -> TimelineSegment | None:
-        for candidate in self._segments:
-            if candidate.start_seconds > segment.start_seconds:
-                return candidate
-        return None
+    def _sync_streams(self, t: float) -> list[TimelineSegment]:
+        """Opens decode streams for the segments on screen at `t` (and
+        the next one when it's close), closes the rest. Returns the
+        segments on screen, outgoing first."""
+        showing = segments_showing(self._segments, t)
+        wanted = {segment.index: segment for segment in showing}
+        for segment in self._segments:
+            if t < segment.start_seconds <= t + 0.75:
+                wanted.setdefault(segment.index, segment)
+        for index in [i for i in self._streams if i not in wanted]:
+            self._streams.pop(index).stop()
+            self._last_frames.pop(index, None)
+        for index, segment in wanted.items():
+            if index not in self._streams:
+                local = max(0.0, t - segment.start_seconds)
+                self._streams[index] = self._open_stream(segment, local_seconds=local)
+        return showing
 
     def _open_stream(self, segment: TimelineSegment, *, local_seconds: float) -> FrameStream:
         command = build_decode_command(
@@ -539,21 +600,66 @@ class PlaybackEngine:
             first_timestamp=segment.start_seconds + local_seconds,
         )
 
-    def _start_stream_at(self, t: float) -> None:
-        self._stop_streams()
-        segment = segment_at(self._segments, t)
-        if segment is None:
-            return
-        self._replace_stream(self._open_stream(segment, local_seconds=t - segment.start_seconds), segment)
-
-    def _replace_stream(self, stream: FrameStream, segment: TimelineSegment) -> None:
-        if self._stream is not None:
-            self._stream.stop()
-        self._stream, self._stream_segment = stream, segment
-
     def _stop_streams(self) -> None:
-        for stream in (self._stream, self._next_stream):
-            if stream is not None:
-                stream.stop()
-        self._stream = self._stream_segment = None
-        self._next_stream = self._next_segment = None
+        for stream in self._streams.values():
+            stream.stop()
+        self._streams.clear()
+        self._last_frames.clear()
+
+
+# --- transitions -------------------------------------------------------------------------------
+
+
+def segments_showing(segments: list[TimelineSegment], t: float) -> list[TimelineSegment]:
+    """The one segment on screen at `t`, or the outgoing and incoming
+    pair during a transition overlap."""
+    showing = [s for s in segments if s.start_seconds <= t < s.end_seconds]
+    if not showing:
+        last = segment_at(segments, t)
+        return [last] if last is not None else []
+    return showing[-2:]
+
+
+def transition_progress(outgoing: TimelineSegment, incoming: TimelineSegment, t: float) -> float:
+    overlap = outgoing.end_seconds - incoming.start_seconds
+    if overlap <= 0:
+        return 1.0
+    return max(0.0, min(1.0, (t - incoming.start_seconds) / overlap))
+
+
+_DISSOLVE_NOISE: dict[tuple[int, int], Image.Image] = {}
+
+
+def _dissolve_noise(size: tuple[int, int]) -> Image.Image:
+    noise = _DISSOLVE_NOISE.get(size)
+    if noise is None:
+        import random
+
+        rng = random.Random(1234)
+        noise = Image.frombytes("L", size, bytes(rng.randrange(256) for _ in range(size[0] * size[1])))
+        _DISSOLVE_NOISE[size] = noise
+    return noise
+
+
+def transition_frame(first: Image.Image, second: Image.Image, kind: str, progress: float) -> Image.Image:
+    """`first` turning into `second`, `progress` of the way through,
+    mirroring ffmpeg xfade's fade/dissolve/slideleft/slideright."""
+    if second.size != first.size:
+        second = second.resize(first.size)
+    width = first.width
+    if kind == "slide_left":
+        offset = round(progress * width)
+        frame = Image.new("RGB", first.size)
+        frame.paste(first, (-offset, 0))
+        frame.paste(second, (width - offset, 0))
+        return frame
+    if kind == "slide_right":
+        offset = round(progress * width)
+        frame = Image.new("RGB", first.size)
+        frame.paste(first, (offset, 0))
+        frame.paste(second, (offset - width, 0))
+        return frame
+    if kind == "dissolve":
+        mask = _dissolve_noise(first.size).point(lambda v: 255 if v < progress * 256 else 0)
+        return Image.composite(second, first, mask)
+    return Image.blend(first, second, progress)

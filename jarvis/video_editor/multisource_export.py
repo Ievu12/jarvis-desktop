@@ -251,9 +251,7 @@ def build_filtergraph(
         # effect at all skips straight to [v{n}] via a plain relabel
         # (see the `has_effect` branch below) - never pays for an extra
         # filter stage it didn't ask for.
-        has_effect = item.effect.motion != "none" or item.effect.fade != "none" or (
-            item.effect.brightness != 0.0 or item.effect.contrast != 1.0 or item.effect.saturation != 1.0
-        )
+        has_effect = not item.effect.is_identity
         raw_label = f"vraw{n}" if has_effect else f"v{n}"
 
         if isinstance(item, TimelineClip):

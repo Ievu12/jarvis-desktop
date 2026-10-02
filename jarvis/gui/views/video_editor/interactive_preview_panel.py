@@ -274,6 +274,27 @@ class InteractivePreviewPanel(ctk.CTkFrame):
     def display_size(self) -> tuple[int, int]:
         return self._display_size
 
+    def fraction_at_root(self, x_root: int, y_root: int) -> tuple[float, float] | None:
+        """Where screen point (x_root, y_root) falls on the video, as
+        fractions of its width/height - None when it's outside it
+        (used when a sticker is dragged in from the library)."""
+        x = x_root - self._canvas.winfo_rootx()
+        y = y_root - self._canvas.winfo_rooty()
+        width, height = self._display_size
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        return round(x / width, 4), round(y / height, 4)
+
+    def show_drop_target(self, active: bool) -> None:
+        """A dashed frame around the video while something is being
+        dragged over it."""
+        self._canvas.delete("drop_target")
+        if active:
+            width, height = self._display_size
+            self._canvas.create_rectangle(
+                3, 3, width - 3, height - 3, outline=theme.ACCENT_PRIMARY, width=3, dash=(8, 4), tags=("drop_target",),
+            )
+
     @property
     def boxes(self) -> list[pc.ElementBox]:
         return list(self._boxes)

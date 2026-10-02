@@ -34,6 +34,8 @@ from jarvis.video_editor import text_render
 from jarvis.video_editor.captions import CaptionLine, CaptionStyle
 from jarvis.video_editor.stickers import (
     StickerInstance,
+    blink_dim_factor,
+    blink_period_seconds,
     builtin_sticker_image,
     is_animated_gif,
     sticker_fade_seconds,
@@ -153,26 +155,33 @@ def _sticker_alpha(sticker: StickerInstance, t: float) -> float:
         fade = sticker_fade_seconds(sticker)
         alpha *= max(0.0, min(1.0, local / fade, (sticker.end_seconds - t) / fade))
     elif sticker.animation == "blink":
-        if (local % 0.6) >= 0.3:
-            alpha = sticker.opacity * 0.2
+        period = blink_period_seconds(sticker)
+        if (local % period) >= period / 2:
+            alpha = sticker.opacity * blink_dim_factor(sticker)
+    if sticker.fade_in_seconds > 0:
+        alpha *= max(0.0, min(1.0, local / sticker.fade_in_seconds))
+    if sticker.fade_out_seconds > 0:
+        alpha *= max(0.0, min(1.0, (sticker.end_seconds - t) / sticker.fade_out_seconds))
     return alpha
 
 
 def _sticker_rotation(sticker: StickerInstance, t: float) -> float:
     if sticker.animation == "spin":
-        return (t - sticker.start_seconds) * 360.0
+        return (t - sticker.start_seconds) * 360.0 * sticker.animation_speed
     return sticker.rotation_degrees
 
 
 def _sticker_y_offset(sticker: StickerInstance, t: float) -> float:
     """Canvas pixels, mirroring stickers._animation_overlay_expressions()."""
     local = t - sticker.start_seconds
+    speed, strength = sticker.animation_speed, sticker.animation_intensity
     if sticker.animation == "pop_in":
-        return 20 * (1 - local / 0.15) if local < 0.15 else 0.0
+        pop = 0.15 / speed
+        return 20 * strength * (1 - local / pop) if local < pop else 0.0
     if sticker.animation == "float":
-        return 8 * math.sin(local * 2)
+        return 8 * strength * math.sin(local * 2 * speed)
     if sticker.animation == "bounce":
-        return -abs(15 * math.sin(local * 4))
+        return -abs(15 * strength * math.sin(local * 4 * speed))
     return 0.0
 
 

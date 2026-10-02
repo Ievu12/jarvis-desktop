@@ -28,6 +28,7 @@ from jarvis.gui.views.video_editor import dashboard as dashboard_module
 from jarvis.gui.views.video_editor.dashboard import VideoEditorView
 from jarvis.gui.worker import CancelableTaskResult
 from jarvis.video_editor import db, storage
+from jarvis.video_editor.timeline import TransitionSpec
 from jarvis.video_studio.ffmpeg_utils import ffmpeg_available
 from jarvis.video_studio.transcribe import model_is_downloaded
 
@@ -130,6 +131,8 @@ def test_category_sidebar_switches_panel_visibility_without_losing_state(root):
         view._on_category_selected(category)
         root.update()
         assert view._timeline_panel.winfo_ismapped()
+        assert view._filters_panel.winfo_ismapped() == (category == "filters")
+        assert view._transitions_panel.winfo_ismapped() == (category == "transitions")
 
 
 def test_new_project_creates_a_real_project(root):
@@ -1337,3 +1340,62 @@ def test_one_undo_history_covers_clips_overlays_and_track_edits(root, tmp_path):
     root.update()
     assert view._editor_state() == before
     root.withdraw()
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_filters_transitions_and_sticker_drop_go_through_one_history(root, tmp_path):
+    """Stage 3: the Filters/Transitions library panels act on the
+    selected clip (else the one under the playhead), a sticker dropped
+    on the video lands where it was dropped, and each is one Undo step."""
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view.pack(fill="both", expand=True)
+    view._on_new_project_clicked()
+    for n, color in enumerate(((255, 0, 0), (0, 0, 255))):
+        path = tmp_path / f"photo{n}.png"
+        Image.new("RGB", (1080, 1920), color=color).save(path)
+        view._on_files_chosen([path])
+        _drain_queue_until(view, lambda n=n: len(view._media_items) == n + 1)
+    for media in list(view._media_items.values()):
+        view._on_add_to_timeline_clicked(media)
+    assert view._engine.duration == 6
+
+    # filter on the clip under the playhead, then on the selected one, then on all
+    view._on_look_chosen("moody")
+    items = view._timeline_panel.timeline.items
+    assert (items[0].effect.look, items[1].effect.look) == ("moody", "none")
+    view._on_look_intensity_changed(0.4, False)  # still moving: nothing applied yet
+    assert view._timeline_panel.timeline.items[0].effect.look_intensity == 1.0
+    view._on_look_intensity_changed(0.4, True)
+    assert view._timeline_panel.timeline.items[0].effect.look_intensity == 0.4
+    view._on_track_selection_changed(("video", 1))
+    assert view._filters_panel._target_label.cget("text").endswith(view._media_items[items[1].media_item_id].original_filename)
+    view._on_look_apply_all()  # the selected clip has no filter: clears both
+    assert {i.effect.look for i in view._timeline_panel.timeline.items} == {"none"}
+    view._on_undo()
+    assert view._timeline_panel.timeline.items[0].effect.look == "moody"
+
+    # a transition out of the first clip shortens the assembled video by its overlap
+    view._on_track_selection_changed(("video", 0))
+    view._on_transition_chosen("dissolve")
+    assert view._timeline_panel.timeline.items[0].transition_out == TransitionSpec("dissolve", 0.5)
+    assert view._engine.duration == pytest.approx(5.5)
+    assert view._track_timeline._transitions == [(0, 2.5, 3.0, "dissolve")]
+    view._on_transition_duration_changed(1.0, True)
+    assert view._engine.duration == pytest.approx(5.0)
+    assert view._history.undo_label == "Perėjimo trukmė"
+
+    # dropping a sticker from the library onto the video
+    view._set_selection(None)
+    view._on_preview_seek(1.0)
+    view._preview_panel.fraction_at_root = lambda x, y: (0.25, 0.75) if x > 0 else None
+    view._on_sticker_dragged("star", -5, 0, True)  # dropped outside the video
+    assert view._stickers == []
+    view._on_sticker_dragged("star", 10, 10, False)
+    view._on_sticker_dragged("star", 10, 10, True)
+    assert len(view._stickers) == 1
+    sticker = view._stickers[0]
+    assert (sticker.shape, sticker.x_fraction, sticker.y_fraction, sticker.start_seconds) == ("star", 0.25, 0.75, 1.0)
+    assert view._preview_panel.selected == ("sticker", 0)
+    view._on_undo()
+    assert view._stickers == []
+    assert view._timeline_panel.timeline.items[0].transition_out.duration_seconds == 1.0

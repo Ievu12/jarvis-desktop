@@ -19,9 +19,11 @@ import customtkinter as ctk
 from jarvis.gui import theme
 from jarvis.gui.views.video_editor.common import LabeledDropdown
 from jarvis.gui.widgets import Card
+from jarvis.video_editor.effects import LOOK_CHOICES, LOOK_LABELS
 from jarvis.video_editor.stickers import STICKER_ANIMATION_CHOICES, StickerInstance
 from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TEXT_ANIMATION_CHOICES, TextOverlay
-from jarvis.video_editor.timeline import TimelineClip, TimelineStill
+from jarvis.video_editor.timeline import TRANSITION_KIND_CHOICES, TimelineClip, TimelineStill, TransitionSpec
+from jarvis.video_editor.track_layout import MIN_TRANSITION_SECONDS, TRANSITION_LABELS
 
 _COMMIT_DELAY_MS = 500
 _SWATCHES = ("white", "black", "#FFD700", "#FF6B9D", "#7FDBFF", "#B8F2A0", "#C9A7FF", "#FF7A45")
@@ -45,6 +47,7 @@ class ElementInspectorPanel(ctk.CTkFrame):
         self._commit_after_id: str | None = None
         self._refreshing = False
         self._value_setters: list[Callable[[object], None]] = []
+        self._max_transition: float | None = None
 
         card = Card(self)
         card.pack(fill="both", expand=True)
@@ -77,15 +80,21 @@ class ElementInspectorPanel(ctk.CTkFrame):
 
     def show_element(
         self, kind: str, index: int, element: TextOverlay | StickerInstance | TimelineClip | TimelineStill,
-        *, title: str = "",
+        *, title: str = "", max_transition: float | None = None,
     ) -> None:
         """`kind` is "text", "sticker" or "clip" (a video clip or photo
-        on the timeline, `title` being its file name)."""
-        if (kind, index) == (self._kind, self._index) and type(element) is type(self._element):
+        on the timeline, `title` being its file name, `max_transition`
+        the longest transition into the next clip it allows - None for
+        the last clip, which has no next one)."""
+        if (
+            (kind, index) == (self._kind, self._index) and type(element) is type(self._element)
+            and max_transition == self._max_transition
+        ):
             self.refresh_values(element)
             return
         self._flush_commit()
         self._kind, self._index, self._element = kind, index, element
+        self._max_transition = max_transition
         self._clear_body()
         if isinstance(element, TextOverlay):
             self._build_text_controls(element)
@@ -118,7 +127,14 @@ class ElementInspectorPanel(ctk.CTkFrame):
             text_color=theme.TEXT_SECONDARY, anchor="w",
         ).pack(anchor="w", pady=(theme.SPACE_SM, 0))
 
-    def _slider(self, label: str, field: str, low: float, high: float, *, steps: int, fmt: str, cast=float) -> ctk.CTkSlider:
+    def _slider(
+        self, label: str, field: str, low: float, high: float, *, steps: int, fmt: str, cast=float,
+        get: Callable[[object], float] | None = None, changes: Callable[[float], dict] | None = None,
+    ) -> ctk.CTkSlider:
+        """A slider for `field`, or for any value `get` reads from the
+        element and `changes(value)` turns into dataclass changes."""
+        get = get or (lambda element: getattr(element, field))
+        changes = changes or (lambda value: {field: value})
         self._label(label)
         row = ctk.CTkFrame(self._body, fg_color="transparent")
         row.pack(fill="x")
@@ -128,14 +144,14 @@ class ElementInspectorPanel(ctk.CTkFrame):
         def on_move(value: float) -> None:
             value_label.configure(text=fmt.format(cast(value)))
             if not self._refreshing:
-                self._edit(**{field: cast(value)})
+                self._edit(**changes(cast(value)))
 
         slider = ctk.CTkSlider(row, from_=low, to=high, number_of_steps=steps, command=on_move, width=180)
         slider.pack(side="left", fill="x", expand=True)
         value_label.pack(side="left", padx=(theme.SPACE_XS, 0))
 
         def set_value(element) -> None:
-            value = getattr(element, field)
+            value = get(element)
             slider.set(max(low, min(high, value)))
             value_label.configure(text=fmt.format(value))
 
@@ -254,7 +270,15 @@ class ElementInspectorPanel(ctk.CTkFrame):
         self._slider("Pasukimas (°)", "rotation_degrees", -180, 180, steps=360, fmt="{:.0f}")
         self._slider("Permatomumas", "opacity", 0.0, 1.0, steps=100, fmt="{:.2f}")
         self._animation_dropdown(STICKER_ANIMATION_CHOICES)
+        self._slider("Animacijos greitis (x)", "animation_speed", 0.25, 4.0, steps=75, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        self._slider("Animacijos stiprumas", "animation_intensity", 0.0, 3.0, steps=60, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
         self._timing_row()
+        self._slider("Atsiradimas (s)", "fade_in_seconds", 0.0, 3.0, steps=30, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        self._slider("Dingimas (s)", "fade_out_seconds", 0.0, 3.0, steps=30, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
         self._action_buttons()
 
     def _build_clip_controls(self, item: TimelineClip | TimelineStill, title: str) -> None:
@@ -275,12 +299,77 @@ class ElementInspectorPanel(ctk.CTkFrame):
             self._entry(row, "source_in_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
             ctk.CTkLabel(row, text=" - ").pack(side="left")
             self._entry(row, "source_out_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+        self._look_controls()
+        self._transition_controls()
         ctk.CTkLabel(
-            self._body, text="Kraštus galite tempti ir laiko juostoje. Efektai ir perėjimai: kairėje, 🎨 Filtrai.",
+            self._body, text="Kraštus galite tempti ir laiko juostoje. Daugiau efektų: kairėje, 🎨 Filtrai.",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
             text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
         ).pack(anchor="w", pady=(theme.SPACE_SM, 0))
         self._action_buttons()
+
+    def _look_controls(self) -> None:
+        labels = tuple(LOOK_LABELS[look] for look in LOOK_CHOICES)
+        dropdown = LabeledDropdown(self._body, "🎨 Filtras:", labels)
+        dropdown.pack(fill="x", pady=(theme.SPACE_SM, 0))
+
+        def on_pick(label: str) -> None:
+            if self._refreshing:
+                return
+            look = LOOK_CHOICES[labels.index(label)]
+            self._edit(final=True, effect=dataclasses.replace(self._element.effect, look=look))
+
+        dropdown.dropdown.configure(command=on_pick)
+        set_label = lambda element: dropdown.set(LOOK_LABELS.get(element.effect.look, labels[0]))  # noqa: E731
+        set_label(self._element)
+        self._value_setters.append(set_label)
+        self._slider(
+            "Filtro intensyvumas (%)", "look_intensity", 0, 100, steps=20, fmt="{:.0f}",
+            cast=lambda v: int(round(v)),
+            get=lambda element: element.effect.look_intensity * 100,
+            changes=lambda value: {"effect": dataclasses.replace(self._element.effect, look_intensity=value / 100)},
+        )
+
+    def _transition_controls(self) -> None:
+        limit = self._max_transition
+        if limit is None:
+            return  # the last clip has nothing to transition into
+        labels = tuple(TRANSITION_LABELS[kind] for kind in TRANSITION_KIND_CHOICES)
+        dropdown = LabeledDropdown(self._body, "⇄ Perėjimas į kitą klipą:", labels)
+        dropdown.pack(fill="x", pady=(theme.SPACE_SM, 0))
+        if limit < MIN_TRANSITION_SECONDS:
+            dropdown.dropdown.configure(state="disabled")
+            dropdown.set(labels[0])
+            self._label("Klipai per trumpi perėjimui.")
+            return
+
+        def on_pick(label: str) -> None:
+            if self._refreshing:
+                return
+            kind = TRANSITION_KIND_CHOICES[labels.index(label)]
+            current = self._element.transition_out
+            if kind == "cut":
+                spec = TransitionSpec()
+            else:
+                duration = current.duration_seconds if current.kind != "cut" else min(0.5, limit)
+                spec = TransitionSpec(kind=kind, duration_seconds=duration)
+            self._edit(final=True, transition_out=spec)
+
+        dropdown.dropdown.configure(command=on_pick)
+        duration_slider = self._slider(
+            "Perėjimo trukmė (s)", "transition_out", MIN_TRANSITION_SECONDS, limit,
+            steps=max(1, int(round((limit - MIN_TRANSITION_SECONDS) * 10))), fmt="{:.1f}",
+            cast=lambda v: round(v, 1),
+            get=lambda element: element.transition_out.duration_seconds,
+            changes=lambda value: {"transition_out": dataclasses.replace(self._element.transition_out, duration_seconds=value)},
+        )
+
+        def set_kind(element) -> None:
+            dropdown.set(TRANSITION_LABELS.get(element.transition_out.kind, labels[0]))
+            duration_slider.configure(state="disabled" if element.transition_out.kind == "cut" else "normal")
+
+        set_kind(self._element)
+        self._value_setters.append(set_kind)
 
     # --- editing -----------------------------------------------------------------------------
 

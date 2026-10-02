@@ -166,6 +166,14 @@ class StickerInstance:
     opacity: float = 1.0
     animation: StickerAnimation = "pop_in"
     tint: tuple[int, int, int] | None = None
+    animation_speed: float = 1.0
+    """How fast the animation runs (spin, float, bounce, blink, pop): 1.0 normal, 2.0 twice as fast."""
+    animation_intensity: float = 1.0
+    """How strong it is (float/bounce/pop distance, how far blink dims): 0 = none, 1.0 normal."""
+    fade_in_seconds: float = 0.0
+    """Appear gradually over this long (0 = appear at once), with any animation."""
+    fade_out_seconds: float = 0.0
+    """Disappear gradually over this long (0 = vanish at once)."""
 
     def validate(self) -> list[str]:
         """Never raises - matches every other dataclass's own
@@ -189,6 +197,14 @@ class StickerInstance:
             problems.append(f"Sticker opacity {self.opacity} must be between 0.0 and 1.0.")
         if self.animation not in STICKER_ANIMATION_CHOICES:
             problems.append(f"Unknown sticker animation: {self.animation!r}.")
+        if not (0.25 <= self.animation_speed <= 4.0):
+            problems.append(f"Animation speed {self.animation_speed} must be between 0.25 and 4.")
+        if not (0.0 <= self.animation_intensity <= 3.0):
+            problems.append(f"Animation intensity {self.animation_intensity} must be between 0 and 3.")
+        if self.fade_in_seconds < 0.0 or self.fade_out_seconds < 0.0:
+            problems.append("Appear/disappear times cannot be negative.")
+        elif self.fade_in_seconds + self.fade_out_seconds > self.end_seconds - self.start_seconds + 1e-6:
+            problems.append("Appear and disappear times together are longer than the sticker is shown.")
         return problems
 
 
@@ -485,6 +501,7 @@ def _animation_overlay_expressions(
     base_x = f"{sticker.x_fraction * canvas_width}-overlay_w/2"
     base_y = f"{sticker.y_fraction * canvas_height}-overlay_h/2"
     start = sticker.start_seconds
+    speed, strength = sticker.animation_speed, sticker.animation_intensity
 
     if sticker.animation == "pop_in":
         # Scale-like effect approximated via a quick vertical settle
@@ -492,11 +509,12 @@ def _animation_overlay_expressions(
         # not just overlay's own x/y - this approximates "pop" via a
         # fast ease-in slide from slightly below, which reads as a pop
         # at normal playback speed, a real, intentional simplification).
-        return (f"{base_x}", f"if(lt(t,{start}+0.15),{base_y}+20*(1-(t-{start})/0.15),{base_y})")
+        pop = 0.15 / speed
+        return (f"{base_x}", f"if(lt(t,{start}+{pop:g}),{base_y}+{20 * strength:g}*(1-(t-{start})/{pop:g}),{base_y})")
     if sticker.animation == "float":
-        return (f"{base_x}", f"{base_y}+8*sin((t-{start})*2)")
+        return (f"{base_x}", f"{base_y}+{8 * strength:g}*sin((t-{start})*{2 * speed:g})")
     if sticker.animation == "bounce":
-        return (f"{base_x}", f"{base_y}-abs(15*sin((t-{start})*4))")
+        return (f"{base_x}", f"{base_y}-abs({15 * strength:g}*sin((t-{start})*{4 * speed:g}))")
     # "none"/"fade_in_out"/"spin"/"blink" use a fixed position - fade/
     # blink are opacity-only (see _alpha_expression() below), spin is
     # rotation-only (see build_sticker_filter()'s own rotate stage).
@@ -504,6 +522,21 @@ def _animation_overlay_expressions(
 
 
 _TIME_DRIVEN_ANIMATIONS = ("spin", "blink", "fade_in_out")
+
+
+def blink_period_seconds(sticker: StickerInstance) -> float:
+    return 0.6 / sticker.animation_speed
+
+
+def blink_dim_factor(sticker: StickerInstance) -> float:
+    """The opacity multiplier during blink's "off" half (0.2 at normal intensity)."""
+    return max(0.0, 1.0 - 0.8 * sticker.animation_intensity)
+
+
+def needs_time_stream(sticker: StickerInstance) -> bool:
+    """Whether the sticker image must be fed as a timed stream (its
+    look changes over time), not a single still frame."""
+    return sticker.animation in _TIME_DRIVEN_ANIMATIONS or sticker.fade_in_seconds > 0 or sticker.fade_out_seconds > 0
 
 
 def sticker_fade_seconds(sticker: StickerInstance) -> float:
@@ -549,11 +582,25 @@ def _alpha_clause(sticker: StickerInstance, *, label_in: str, label_out: str) ->
         # here used to make every transparent pixel opaque, so a
         # blinking heart showed up as a solid square.
         start = sticker.start_seconds
+        period = blink_period_seconds(sticker)
         return (
             f"[{label_in}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-            f"a='alpha(X,Y)*if(lt(mod(T-{start},0.6),0.3),{base},{base * 0.2})'[{label_out}]"
+            f"a='alpha(X,Y)*if(lt(mod(T-{start},{period:g}),{period / 2:g}),{base},{base * blink_dim_factor(sticker):g})'"
+            f"[{label_out}]"
         )
     return f"[{label_in}]colorchannelmixer=aa={base}[{label_out}]"
+
+
+def _appear_disappear_clause(sticker: StickerInstance, *, label_in: str, label_out: str) -> str:
+    """Gradual appear/disappear on top of whatever the animation does."""
+    stages = []
+    if sticker.fade_in_seconds > 0:
+        stages.append(f"fade=t=in:st={sticker.start_seconds}:d={sticker.fade_in_seconds}:alpha=1")
+    if sticker.fade_out_seconds > 0:
+        stages.append(
+            f"fade=t=out:st={sticker.end_seconds - sticker.fade_out_seconds}:d={sticker.fade_out_seconds}:alpha=1"
+        )
+    return f"[{label_in}]{','.join(stages)}[{label_out}]"
 
 
 def build_sticker_filter(
@@ -586,7 +633,13 @@ def build_sticker_filter(
 
     scaled_label = f"stk{input_index}scaled"
     alpha_label = f"stk{input_index}"
-    alpha_clause = _alpha_clause(sticker, label_in=scaled_label, label_out=alpha_label)
+    if sticker.fade_in_seconds > 0 or sticker.fade_out_seconds > 0:
+        alpha_clause = (
+            _alpha_clause(sticker, label_in=scaled_label, label_out=f"{alpha_label}a") + ";"
+            + _appear_disappear_clause(sticker, label_in=f"{alpha_label}a", label_out=alpha_label)
+        )
+    else:
+        alpha_clause = _alpha_clause(sticker, label_in=scaled_label, label_out=alpha_label)
 
     rotate_clause = ""
     rotated_label = alpha_label
@@ -594,7 +647,7 @@ def build_sticker_filter(
         import math
 
         if sticker.animation == "spin":
-            angle_expr = f"(t-{sticker.start_seconds})*2*PI"
+            angle_expr = f"(t-{sticker.start_seconds})*2*PI*{sticker.animation_speed:g}"
         else:
             angle_expr = f"{math.radians(sticker.rotation_degrees)}"
         rotated_label = f"stk{input_index}rot"
@@ -611,7 +664,7 @@ def build_sticker_filter(
     # ffmpeg still terminates; setpts shifts its first frame to `start`.
     gif_prefix = ""
     extra_input_args = ["-i", str(image_path)]
-    if sticker.animation in _TIME_DRIVEN_ANIMATIONS:
+    if needs_time_stream(sticker):
         # A plain `-i image.png` is ONE frame at t=0 that overlay keeps
         # repeating, so `rotate`'s t, `geq`'s T and `fade` all saw t=0
         # forever: "spin" froze at one angle, "blink" never blinked and

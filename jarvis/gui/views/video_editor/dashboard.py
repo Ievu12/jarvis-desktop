@@ -41,6 +41,7 @@ from jarvis.gui.views.video_editor.element_inspector_panel import ElementInspect
 from jarvis.gui.views.video_editor.export_panel import ExportPanel
 from jarvis.gui.views.video_editor.import_panel import ImportPanel
 from jarvis.gui.views.video_editor.interactive_preview_panel import InteractivePreviewPanel
+from jarvis.gui.views.video_editor.looks_panel import FiltersPanel, TransitionsPanel
 from jarvis.gui.views.video_editor.music_panel import MusicPanel
 from jarvis.gui.views.video_editor.reel_templates_panel import ReelTemplatesPanel
 from jarvis.gui.views.video_editor.stickers_panel import StickersPanel
@@ -149,9 +150,9 @@ _CATEGORY_PANEL_ATTRS: dict[str, tuple[str, ...]] = {
     "clips": ("_import_panel", "_timeline_panel"),
     "animations": ("_timeline_panel",),
     "stickers": ("_stickers_panel",),
-    "transitions": ("_timeline_panel",),
+    "transitions": ("_transitions_panel", "_timeline_panel"),
     "text": ("_captions_panel", "_text_overlay_panel", "_speech_sync_panel"),
-    "filters": ("_timeline_panel",),
+    "filters": ("_filters_panel", "_timeline_panel"),
     "music": ("_music_panel",),
     "format": ("_timeline_panel",),
     "templates": ("_reel_templates_panel",),
@@ -287,6 +288,15 @@ class VideoEditorView(ctk.CTkFrame):
             on_undo_requested=self._on_undo, on_redo_requested=self._on_redo,
         )
 
+        self._filters_panel = FiltersPanel(
+            self._scroll, on_look_chosen=self._on_look_chosen, on_intensity_changed=self._on_look_intensity_changed,
+            on_apply_all=self._on_look_apply_all, render_previews=playback.render_look_previews,
+        )
+        self._transitions_panel = TransitionsPanel(
+            self._scroll, on_transition_chosen=self._on_transition_chosen,
+            on_duration_changed=self._on_transition_duration_changed, on_apply_all=self._on_transition_apply_all,
+        )
+
         self._captions_panel = CaptionsPanel(
             self._scroll, on_style_changed=self._on_caption_style_changed,
             on_generate_requested=self._on_generate_subtitles_requested,
@@ -298,7 +308,9 @@ class VideoEditorView(ctk.CTkFrame):
 
         self._speech_sync_panel = SpeechSyncPanel(self._scroll, get_words=lambda: self._last_transcribed_words)
 
-        self._stickers_panel = StickersPanel(self._scroll, on_stickers_changed=self._on_stickers_changed)
+        self._stickers_panel = StickersPanel(
+            self._scroll, on_stickers_changed=self._on_stickers_changed, on_shape_dragged=self._on_sticker_dragged,
+        )
 
         self._music_panel = MusicPanel(
             self._scroll, on_file_chosen=self._on_music_file_chosen, on_track_changed=self._on_music_track_changed,
@@ -339,7 +351,7 @@ class VideoEditorView(ctk.CTkFrame):
             button.configure(fg_color=theme.ACCENT_PRIMARY if key == category else theme.BG_CARD)
 
         all_panels = (
-            self._import_panel, self._timeline_panel, self._captions_panel,
+            self._import_panel, self._filters_panel, self._transitions_panel, self._timeline_panel, self._captions_panel,
             self._text_overlay_panel, self._speech_sync_panel, self._stickers_panel, self._music_panel,
             self._reel_templates_panel, self._ai_assistant_panel, self._export_panel,
         )
@@ -639,6 +651,8 @@ class VideoEditorView(ctk.CTkFrame):
             return
         engine.seek(t)
         self._show_time(engine.position, engine.duration, playing=engine.playing)
+        if self._selection is None or self._selection[0] != "clip":
+            self._refresh_look_panels()
         if not engine.playing:
             self._cancel_exact_frame()
             self._request_base_frame()
@@ -756,6 +770,7 @@ class VideoEditorView(ctk.CTkFrame):
 
     def _sync_inspector_with_selection(self) -> None:
         """Shows the selected element's settings (or none)."""
+        self._refresh_look_panels()
         ref = self._selection
         if ref is not None:
             kind, index = ref
@@ -769,7 +784,12 @@ class VideoEditorView(ctk.CTkFrame):
                 if 0 <= index < len(items):
                     media = self._media_items.get(items[index].media_item_id)
                     title = media.original_filename if media is not None else ""
-                    self._inspector_panel.show_element("clip", index, items[index], title=title)
+                    max_transition = None
+                    if index < len(items) - 1:
+                        max_transition = track_layout.max_transition_seconds(self._editor_state(), index)
+                    self._inspector_panel.show_element(
+                        "clip", index, items[index], title=title, max_transition=max_transition,
+                    )
                     return
             self._selection = None
         if self._inspector_panel.shown is not None:
@@ -813,6 +833,99 @@ class VideoEditorView(ctk.CTkFrame):
             self._set_selection(None)
             self._track_timeline.select(ref)
             self._on_category_selected("music" if track == "audio" else "text")
+
+    # --- filters and transitions (library panels) -------------------------------------------
+
+    def _look_target(self) -> int | None:
+        """The clip the Filters/Transitions panels apply to: the
+        selected clip, else the one under the playhead."""
+        items = self._timeline_panel.timeline.items
+        if not items:
+            return None
+        if self._selection is not None and self._selection[0] == "clip" and 0 <= self._selection[1] < len(items):
+            return self._selection[1]
+        position = self._engine.position if self._engine is not None else 0.0
+        segments = playback.timeline_segments(self._timeline_panel.timeline, self._media_items)
+        for segment in segments:
+            if segment.start_seconds <= position < segment.end_seconds:
+                return segment.index
+        return segments[-1].index if segments else 0
+
+    def _refresh_look_panels(self) -> None:
+        if not hasattr(self, "_filters_panel"):
+            return
+        index = self._look_target()
+        if index is None:
+            self._filters_panel.show_target(None, None, None)
+            self._transitions_panel.show_target(None, None, None)
+            return
+        items = self._timeline_panel.timeline.items
+        item = items[index]
+        media = self._media_items.get(item.media_item_id)
+        title = media.original_filename if media is not None else f"#{index + 1}"
+        self._filters_panel.show_target(title, item.effect, self._get_thumbnail(media) if media is not None else None)
+        limit = track_layout.max_transition_seconds(self._editor_state(), index) if index < len(items) - 1 else None
+        self._transitions_panel.show_target(title, item.transition_out, limit)
+
+    def _on_look_chosen(self, look: str) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        effect = self._timeline_panel.timeline.items[index].effect
+        intensity = effect.look_intensity if effect.look != "none" and effect.look_intensity > 0 else 1.0
+        self._apply_editor_state(
+            track_layout.set_look(self._editor_state(), index, look, intensity), label="Filtras",
+        )
+
+    def _on_look_intensity_changed(self, intensity: float, final: bool) -> None:
+        """Applied once the slider rests (each change restarts decoding)."""
+        index = self._look_target()
+        if index is None or not final:
+            return
+        look = self._timeline_panel.timeline.items[index].effect.look
+        self._apply_editor_state(
+            track_layout.set_look(self._editor_state(), index, look, intensity),
+            label="Filtro intensyvumas", coalesce_key=f"look:{index}",
+        )
+
+    def _on_look_apply_all(self) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        effect = self._timeline_panel.timeline.items[index].effect
+        self._apply_editor_state(
+            track_layout.set_look(self._editor_state(), None, effect.look, effect.look_intensity),
+            label="Filtras visiems klipams",
+        )
+
+    def _on_transition_chosen(self, kind: str) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        self._apply_editor_state(
+            track_layout.set_transition(self._editor_state(), index, kind, self._transitions_panel.duration()),
+            label="Perėjimas",
+        )
+
+    def _on_transition_duration_changed(self, duration: float, final: bool) -> None:
+        index = self._look_target()
+        if index is None or not final:
+            return
+        kind = self._timeline_panel.timeline.items[index].transition_out.kind
+        self._apply_editor_state(
+            track_layout.set_transition(self._editor_state(), index, kind, duration),
+            label="Perėjimo trukmė", coalesce_key=f"transition:{index}",
+        )
+
+    def _on_transition_apply_all(self) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        transition = self._timeline_panel.timeline.items[index].transition_out
+        self._apply_editor_state(
+            track_layout.set_transition_everywhere(self._editor_state(), transition.kind, transition.duration_seconds),
+            label="Perėjimas visiems klipams",
+        )
 
     def _on_element_edited(self, kind: str, index: int, new_element, final: bool) -> None:
         """An element was moved/resized/rotated in the preview or
@@ -924,6 +1037,24 @@ class VideoEditorView(ctk.CTkFrame):
             return
         self._add_element("sticker", StickerInstance(
             start_seconds=start, end_seconds=end, shape="heart", animation="none",
+        ))
+
+    def _on_sticker_dragged(self, shape: str, x_root: int, y_root: int, dropped: bool) -> None:
+        """A sticker dragged from the library: dropping it on the video
+        places it there, at the current time."""
+        fraction = self._preview_panel.fraction_at_root(x_root, y_root)
+        if not dropped:
+            self._preview_panel.show_drop_target(fraction is not None)
+            return
+        self._preview_panel.show_drop_target(False)
+        if fraction is None:
+            return
+        start, end = self._quick_add_window()
+        if end is None:
+            return
+        self._add_element("sticker", StickerInstance(
+            start_seconds=start, end_seconds=end, shape=shape, animation="none",
+            x_fraction=fraction[0], y_fraction=fraction[1],
         ))
 
     def _quick_add_window(self) -> tuple[float, float | None]:

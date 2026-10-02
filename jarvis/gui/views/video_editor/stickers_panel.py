@@ -13,6 +13,7 @@ collections), never confused with the placed-stickers list itself."""
 from __future__ import annotations
 
 import dataclasses
+import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
 from typing import Callable
@@ -45,13 +46,22 @@ _THUMB_SIZE = 56
 
 
 class StickersPanel(ctk.CTkFrame):
-    def __init__(self, master, *, on_stickers_changed: Callable[[list[StickerInstance]], None], **kwargs) -> None:
+    def __init__(
+        self, master, *, on_stickers_changed: Callable[[list[StickerInstance]], None],
+        on_shape_dragged: Callable[[str, int, int, bool], None] | None = None, **kwargs,
+    ) -> None:
         """`on_stickers_changed(stickers)` fires with the current,
         valid-only sticker list whenever any row changes - same "one bad
         entry doesn't break everything else" validation spirit as
-        TextOverlayPanel's own on_overlays_changed."""
+        TextOverlayPanel's own on_overlays_changed.
+
+        `on_shape_dragged(shape, x_root, y_root, dropped)` follows a
+        library sticker being dragged out of the grid (e.g. onto the
+        preview): `dropped` is False while moving, True on release."""
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_stickers_changed = on_stickers_changed
+        self._on_shape_dragged = on_shape_dragged
+        self._drag: dict | None = None
         self._stickers: list[StickerInstance] = []
         self._library_state = sl.load_library()
         self._thumb_cache: dict[str, object] = {}
@@ -83,6 +93,15 @@ class StickersPanel(ctk.CTkFrame):
         self._category_dropdown = LabeledDropdown(browser_row, "", _LIBRARY_CATEGORY_LABELS)
         self._category_dropdown.dropdown.configure(command=lambda _v: self._render_library_grid())
         self._category_dropdown.pack(side="left")
+        if not self._library_state.favorite_shapes:
+            # Nothing favorited yet: open on the first real category, not an empty list.
+            self._category_dropdown.set(_LIBRARY_CATEGORY_LABELS[2])
+        if on_shape_dragged is not None:
+            ctk.CTkLabel(
+                inner, text="Tempkite lipduką ant vaizdo peržiūroje: jis atsiras toje vietoje.",
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+                text_color=theme.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=(0, theme.SPACE_XS))
 
         self._library_grid = ctk.CTkFrame(inner, fg_color="transparent")
         self._library_grid.pack(fill="x", pady=(0, theme.SPACE_SM))
@@ -165,6 +184,10 @@ class StickersPanel(ctk.CTkFrame):
                 fg_color=theme.ACCENT_PRIMARY if is_favorite else theme.BG_CARD,
             )
             btn.pack()
+            if self._on_shape_dragged is not None:
+                btn.bind("<ButtonPress-1>", lambda e, s=shape: self._on_drag_press(s, e), add="+")
+                btn.bind("<B1-Motion>", self._on_drag_motion, add="+")
+                btn.bind("<ButtonRelease-1>", self._on_drag_release, add="+")
             fav_btn = ctk.CTkButton(
                 cell, text=("★" if is_favorite else "☆"), width=_THUMB_SIZE, height=16,
                 command=lambda s=shape: self._on_toggle_favorite_clicked(s),
@@ -176,6 +199,38 @@ class StickersPanel(ctk.CTkFrame):
         self._stickers.append(StickerInstance(start_seconds=0.0, end_seconds=2.0, shape=shape))
         self._render()
         self._emit()
+
+    # --- dragging a library sticker out (onto the preview) ------------------------------------
+
+    def _on_drag_press(self, shape: str, event) -> None:
+        self._drag = {"shape": shape, "x": event.x_root, "y": event.y_root, "ghost": None}
+
+    def _on_drag_motion(self, event) -> None:
+        drag = self._drag
+        if drag is None:
+            return
+        if drag["ghost"] is None:
+            if abs(event.x_root - drag["x"]) + abs(event.y_root - drag["y"]) < 8:
+                return
+            ghost = tk.Toplevel(self)
+            ghost.overrideredirect(True)
+            try:
+                ghost.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            tk.Label(
+                ghost, text=f"✨ {drag['shape']}", bg=theme.ACCENT_PRIMARY, fg="white", padx=8, pady=4,
+            ).pack()
+            drag["ghost"] = ghost
+        drag["ghost"].geometry(f"+{event.x_root + 12}+{event.y_root + 12}")
+        self._on_shape_dragged(drag["shape"], event.x_root, event.y_root, False)
+
+    def _on_drag_release(self, event) -> None:
+        drag, self._drag = self._drag, None
+        if drag is None or drag["ghost"] is None:
+            return  # a plain click: the button's own command adds the sticker
+        drag["ghost"].destroy()
+        self._on_shape_dragged(drag["shape"], event.x_root, event.y_root, True)
 
     def _on_toggle_favorite_clicked(self, shape: str) -> None:
         self._library_state = sl.toggle_favorite(shape)
