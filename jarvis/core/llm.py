@@ -1,15 +1,53 @@
 """Thin wrapper around the Claude API. Isolated here so the rest of the
-codebase never talks to the Anthropic SDK directly."""
+codebase never talks to the Anthropic SDK directly.
+
+Deferred `anthropic` import (real, reported bug fix - "JARVIS won't
+open at all: ImportError: DLL load failed while importing jiter"): the
+`anthropic` package transitively imports `jiter` (its own JSON-parsing
+dependency), which Windows Smart App Control can block on some
+machines (a per-DLL reputation block, not something this codebase can
+fix - see this project's own RELEASE.md "Known limitation on this
+machine" section for the identical, previously-documented block
+against other packages' compiled extensions). Before this fix,
+`import anthropic` sat at MODULE level here, so simply importing
+jarvis.core.llm - which jarvis.gui.app/.core.agent both do at their own
+module level, just to reference the LLMClient NAME - failed immediately
+and took the entire GUI down with it, even for someone who never
+intended to use any AI feature that session, and even if ANTHROPIC_API_KEY
+was never going to be used successfully anyway.
+
+`anthropic` (and its own `.types` submodules) is now imported ONLY
+inside LLMClient.__init__() - the one place this module ever actually
+NEEDS the real package at runtime (to construct anthropic.Anthropic()).
+Every other reference to an anthropic type in this file is a type
+ANNOTATION ONLY (guarded by `from __future__ import annotations` above,
+so it's never evaluated at runtime) or resolved through
+TYPE_CHECKING - never evaluated unless a real type checker (pyright/
+mypy) is running, never at real import time. This means:
+  - `import jarvis.core.llm` (and therefore `import jarvis.core.agent`/
+    `import jarvis.gui.app`) now ALWAYS succeeds, regardless of whether
+    the real `anthropic` package can be imported on this machine.
+  - LLMClient() itself still raises ImportError with a CLEAR, actionable
+    message (not the raw, confusing "DLL load failed while importing
+    jiter" trace) the moment someone actually tries to use an AI
+    feature - exactly matching this module's own established "None
+    when unavailable, clear error when actually invoked" convention
+    (see jarvis.gui.app's own `self.llm = LLMClient(...) if
+    ANTHROPIC_API_KEY else None` pattern one layer up - this is the
+    SAME safe-degradation philosophy, just also covering the "package
+    literally cannot be imported at all" case that check alone never
+    anticipated)."""
 
 from __future__ import annotations
 
-from typing import Any, cast
-
-import anthropic
-from anthropic.types import MessageParam
-from anthropic.types.tool_union_param import ToolUnionParam
+from typing import TYPE_CHECKING, Any, cast
 
 from jarvis.config import ANTHROPIC_API_KEY
+
+if TYPE_CHECKING:
+    import anthropic
+    from anthropic.types import MessageParam
+    from anthropic.types.tool_union_param import ToolUnionParam
 
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 4096
@@ -283,6 +321,20 @@ BASE_SYSTEM_PROMPT = (
     "also tells you which topics were already suggested recently so you "
     "avoid repeating them - when that context is present in the prompt, "
     "follow it.\n\n"
+    "If the user asks about AI Video Studio projects (e.g. 'do I have any "
+    "unfinished video projects?', 'ar turiu nebaigtų video projektų?', "
+    "'baik mano Reel'), use list_video_studio_projects - a read-only tool "
+    "that lists projects (filename, status, created date) from the "
+    "desktop app's AI Video Studio feature. This tool ONLY reports "
+    "status - it cannot upload, analyze, transcribe, find highlights in, "
+    "create a Reel from, generate a cover for, or export any video, and "
+    "there is no other tool that can either. If asked to 'finish the "
+    "Reel' or 'create today's Reel', tell the user to open the AI Video "
+    "Studio view in the JARVIS desktop app to do it themselves (each "
+    "step - transcript, highlight candidates, the edit plan, the "
+    "exported file - is reviewable there before committing to it) - "
+    "never attempt any part of that pipeline yourself or claim you did "
+    "it.\n\n"
     "Follow this order of operations for any request about the project's "
     "state or what to do next (e.g. 'check my project and tell me what to "
     "do', 'I want to clean this up', 'is this ready to commit'):\n"
@@ -368,6 +420,27 @@ class LLMClient:
             raise RuntimeError(
                 "ANTHROPIC_API_KEY is not set. Set it in your environment before running JARVIS."
             )
+        # Deferred import (see this module's own docstring for the full
+        # "JARVIS won't open at all" bug fix this is part of) - the ONE
+        # place the real `anthropic` package is actually needed at
+        # runtime, so this is the ONE place its own failure (missing
+        # package, or blocked here by Windows Smart App Control - see
+        # RELEASE.md's own documented finding) can surface, with a
+        # clear, actionable message instead of a raw ImportError deep in
+        # anthropic's own jiter dependency taking down the whole app at
+        # startup before anyone even tried to use an AI feature.
+        try:
+            import anthropic
+        except ImportError as e:
+            raise ImportError(
+                "The 'anthropic' package (JARVIS's own Claude API client) couldn't be loaded: "
+                f"{e}\n\nIf this mentions 'jiter' and 'Application Control policy has blocked this "
+                "file', this is a Windows Smart App Control block on this specific machine, not a "
+                "missing/corrupt install - see this project's own RELEASE.md 'Known limitation on "
+                "this machine: Windows Smart App Control' section. AI-powered features (chat, Reel "
+                "Generator's AI steps, etc.) are unavailable until this is resolved; every other "
+                "JARVIS feature that doesn't need the Claude API keeps working normally."
+            ) from e
         self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         self._system_prompt = BASE_SYSTEM_PROMPT
         if project_notes:
@@ -408,6 +481,13 @@ class LLMClient:
             model=MODEL,
             max_tokens=max_tokens if max_tokens is not None else MAX_TOKENS,
             system=system if system is not None else self._system_prompt,
-            messages=cast(list[MessageParam], messages),
-            tools=cast(list[ToolUnionParam], tools),
+            # cast() takes a STRING type here ("list[MessageParam]", not
+            # list[MessageParam]) so this line never evaluates the real
+            # MessageParam/ToolUnionParam names at runtime - those are
+            # only ever imported under TYPE_CHECKING now (see this
+            # module's own docstring for why) - cast()'s own first
+            # argument is documented to accept either form and a type
+            # checker resolves the string exactly the same way.
+            messages=cast("list[MessageParam]", messages),
+            tools=cast("list[ToolUnionParam]", tools),
         )

@@ -1,9 +1,21 @@
 """Tests for LLMClient's system prompt construction with optional
 project_notes: base prompt preserved, notes appended clearly delimited,
 no notes leaves the prompt unchanged. No real API calls - only inspects
-the constructed system prompt string."""
+the constructed system prompt string.
+
+Real, reported bug fix ("JARVIS won't open at all: ImportError: DLL
+load failed while importing jiter") made `import anthropic` a deferred,
+runtime import inside LLMClient.__init__() itself (see jarvis.core.llm's
+own docstring) - `fake_api_key` below also stubs sys.modules["anthropic"]
+so these tests exercise LLMClient's own system-prompt logic without
+depending on whether the real anthropic package can actually be
+imported on the machine running the suite (it may be blocked by Windows
+Smart App Control there)."""
 
 from __future__ import annotations
+
+import sys
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,6 +25,7 @@ from jarvis.core.llm import BASE_SYSTEM_PROMPT, LLMClient
 @pytest.fixture
 def fake_api_key(monkeypatch):
     monkeypatch.setattr("jarvis.core.llm.ANTHROPIC_API_KEY", "sk-ant-fake-for-tests")
+    monkeypatch.setitem(sys.modules, "anthropic", MagicMock())
 
 
 def test_no_project_notes_leaves_prompt_unchanged(fake_api_key):

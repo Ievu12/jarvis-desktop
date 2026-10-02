@@ -729,6 +729,55 @@ class InstagramConnector(Connector):
                 values[name] = float(raw_value)
         return values
 
+    def get_recent_media_with_insights(
+        self, limit: int = _DEFAULT_MEDIA_LIMIT
+    ) -> list[dict[str, Any]]:
+        """Public, READ_ONLY, structured-data counterpart to the
+        execute("list_recent_media")/execute("get_media_insights") pair -
+        those two return pre-formatted display text (see their _do_*
+        methods above), which jarvis.instagram_ai_manager
+        .analytics_services needs as real numbers to compute on (median
+        views, engagement rate, performance scores, etc.), not text to
+        parse back apart. Reuses the exact same Graph API calls those
+        actions already make (_get() for the media list,
+        _fetch_media_insights_values() per post) - no new endpoint, no
+        new permission, nothing this connector couldn't already do.
+
+        Returns a list of dicts, most recent first, each with:
+        id, caption, media_type, permalink, timestamp, and every numeric
+        insight jarvis.integrations.connectors.instagram
+        ._MEDIA_INSIGHTS_METRICS covers (likes, comments, shares, saved,
+        total_interactions, reach) - a metric missing for a given post
+        (e.g. too new) is simply absent from that post's dict, never
+        defaulted to 0. Raises CredentialError under the same conditions
+        _get()/_account_id() already do (not configured, expired
+        tokens) - callers should handle that exactly like any other
+        Instagram call, e.g. by catching it same as
+        jarvis.tools.instagram_tools._run_instagram_action() does.
+        """
+        limit = max(1, min(limit, _MAX_MEDIA_LIMIT))
+        account_id = self._account_id()
+        data = self._get(
+            f"/{account_id}/media",
+            params={"fields": "id,caption,media_type,permalink,timestamp", "limit": limit},
+        )
+
+        results: list[dict[str, Any]] = []
+        for item in data.get("data", []):
+            media_id = item.get("id")
+            if not media_id:
+                continue
+            record: dict[str, Any] = {
+                "id": media_id,
+                "caption": item.get("caption") or "",
+                "media_type": item.get("media_type", "?"),
+                "permalink": item.get("permalink", ""),
+                "timestamp": item.get("timestamp", "?"),
+            }
+            record.update(self._fetch_media_insights_values(media_id))
+            results.append(record)
+        return results
+
     @staticmethod
     def _percent_change(previous: float, current: float) -> str:
         """Format a percent-change + direction marker for one metric.

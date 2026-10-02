@@ -256,6 +256,177 @@ def test_azure_tts_never_leaks_the_key_into_url():
         assert "super-secret-key" not in request.full_url
 
 
+def test_azure_ssml_default_rate_omits_prosody_tag():
+    from jarvis.voice.text_to_speech import _build_azure_ssml
+
+    ssml = _build_azure_ssml("labas")
+    assert "<prosody" not in ssml
+
+
+def test_azure_ssml_non_default_rate_wraps_text_in_prosody_tag():
+    from jarvis.voice.text_to_speech import _build_azure_ssml
+
+    ssml = _build_azure_ssml("labas", rate="fast")
+    assert '<prosody rate="fast">labas</prosody>' in ssml
+
+
+def test_azure_ssml_custom_voice_name_sets_matching_lang():
+    from jarvis.voice.text_to_speech import _build_azure_ssml
+
+    ssml = _build_azure_ssml("hello", voice_name="en-US-JennyNeural")
+    assert 'xml:lang="en-US"' in ssml
+    assert "en-US-JennyNeural" in ssml
+
+
+# --- is_file_synthesis_configured() ---------------------------------------------------
+
+
+def test_is_file_synthesis_configured_true_when_both_set():
+    from jarvis.voice.text_to_speech import is_file_synthesis_configured
+
+    with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", "fake-key"):
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", "westeurope"):
+            assert is_file_synthesis_configured() is True
+
+
+def test_is_file_synthesis_configured_false_when_either_missing():
+    from jarvis.voice.text_to_speech import is_file_synthesis_configured
+
+    with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", None):
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", "westeurope"):
+            assert is_file_synthesis_configured() is False
+    with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", "fake-key"):
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", None):
+            assert is_file_synthesis_configured() is False
+
+
+# --- synthesize_to_file() --------------------------------------------------------------
+
+
+def _make_valid_wav_bytes() -> bytes:
+    import io
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(24000)
+        wav_file.writeframes(b"\x00\x00" * 100)
+    return buffer.getvalue()
+
+
+def test_synthesize_to_file_blank_text_returns_clear_error_without_network_call(tmp_path):
+    from jarvis.voice.text_to_speech import synthesize_to_file
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        result = synthesize_to_file("   ", output_path=tmp_path / "voice.wav")
+    mock_urlopen.assert_not_called()
+    assert result.ok is False
+    assert result.output_path is None
+    assert "narration text" in result.error
+
+
+def test_synthesize_to_file_not_configured_returns_clear_error_naming_env_vars(tmp_path):
+    from jarvis.voice.text_to_speech import synthesize_to_file
+
+    with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", None):
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", None):
+            with patch("urllib.request.urlopen") as mock_urlopen:
+                result = synthesize_to_file("Hello there.", output_path=tmp_path / "voice.wav")
+    mock_urlopen.assert_not_called()
+    assert result.ok is False
+    assert result.output_path is None
+    assert "AZURE_SPEECH_KEY" in result.error
+    assert "AZURE_SPEECH_REGION" in result.error
+    assert not (tmp_path / "voice.wav").exists()
+
+
+def test_synthesize_to_file_writes_real_wav_file_on_success(tmp_path):
+    from jarvis.voice.text_to_speech import synthesize_to_file
+
+    wav_bytes = _make_valid_wav_bytes()
+    mock_token_response = MagicMock()
+    mock_token_response.__enter__.return_value.read.return_value = b"fake-token"
+    mock_audio_response = MagicMock()
+    mock_audio_response.__enter__.return_value.read.return_value = wav_bytes
+
+    output_path = tmp_path / "voiceover" / "scene_all.wav"
+    with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", "fake-key"):
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", "westeurope"):
+            with patch("urllib.request.urlopen", side_effect=[mock_token_response, mock_audio_response]):
+                result = synthesize_to_file("Three ways to start your day.", output_path=output_path)
+
+    assert result.ok is True
+    assert result.error is None
+    assert result.output_path == output_path
+    assert output_path.is_file()
+    assert output_path.read_bytes() == wav_bytes
+
+
+def test_synthesize_to_file_azure_request_failure_returns_clear_error(tmp_path):
+    import urllib.error
+
+    from jarvis.voice.text_to_speech import synthesize_to_file
+
+    with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", "fake-key"):
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", "westeurope"):
+            with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no network")):
+                result = synthesize_to_file("Hello there.", output_path=tmp_path / "voice.wav")
+
+    assert result.ok is False
+    assert result.output_path is None
+    assert "Azure Speech request failed" in result.error
+    assert not (tmp_path / "voice.wav").exists()
+
+
+def test_synthesize_to_file_invalid_wav_response_returns_clear_error(tmp_path):
+    from jarvis.voice.text_to_speech import synthesize_to_file
+
+    mock_token_response = MagicMock()
+    mock_token_response.__enter__.return_value.read.return_value = b"fake-token"
+    mock_audio_response = MagicMock()
+    mock_audio_response.__enter__.return_value.read.return_value = b"not a real wav file"
+
+    with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", "fake-key"):
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", "westeurope"):
+            with patch("urllib.request.urlopen", side_effect=[mock_token_response, mock_audio_response]):
+                result = synthesize_to_file("Hello there.", output_path=tmp_path / "voice.wav")
+
+    assert result.ok is False
+    assert result.output_path is None
+    assert "valid audio" in result.error
+    assert not (tmp_path / "voice.wav").exists()
+
+
+def test_synthesize_to_file_never_leaks_the_key():
+    from jarvis.voice.text_to_speech import synthesize_to_file
+
+    wav_bytes = _make_valid_wav_bytes()
+    mock_token_response = MagicMock()
+    mock_token_response.__enter__.return_value.read.return_value = b"fake-token"
+    mock_audio_response = MagicMock()
+    mock_audio_response.__enter__.return_value.read.return_value = wav_bytes
+
+    captured_requests = []
+
+    def _capture(request, timeout=None):
+        captured_requests.append(request)
+        return mock_token_response if len(captured_requests) == 1 else mock_audio_response
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_KEY", "super-secret-key"):
+            with patch("jarvis.voice.text_to_speech.AZURE_SPEECH_REGION", "westeurope"):
+                with patch("urllib.request.urlopen", side_effect=_capture):
+                    synthesize_to_file("Hello there.", output_path=Path(tmp) / "voice.wav")
+
+    for request in captured_requests:
+        assert "super-secret-key" not in request.full_url
+
+
 # --- _play_wav_bytes: validates WAV, uses stdlib winsound, never raises -------------
 
 

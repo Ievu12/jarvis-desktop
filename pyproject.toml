@@ -15,6 +15,7 @@ dependencies = [
     "PyAudio>=0.2.13",
     "customtkinter>=5.2.0",
     "packaging>=23.0",
+    "Pillow>=10.0.0",
 ]
 
 [project.scripts]

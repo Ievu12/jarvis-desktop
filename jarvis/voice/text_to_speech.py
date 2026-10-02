@@ -35,6 +35,7 @@ import io
 import struct
 import wave
 from dataclasses import dataclass
+from pathlib import Path
 
 from jarvis.config import AZURE_SPEECH_KEY, AZURE_SPEECH_REGION
 
@@ -134,16 +135,29 @@ def _fetch_azure_access_token(key: str, region: str) -> str | None:
         return None
 
 
-def _build_azure_ssml(text: str) -> str:
+def _build_azure_ssml(text: str, *, voice_name: str = _AZURE_NEURAL_VOICE_NAME, rate: str = "medium") -> str:
     # Minimal, safe XML escaping - the spoken text is arbitrary JARVIS
-    # output, never assumed to already be XML-safe.
+    # output, never assumed to already be XML-safe. `voice_name` is
+    # accepted as a parameter (defaulting to the same Lithuanian voice
+    # speak() always used) so synthesize_to_file() callers can request a
+    # different configured Azure Neural voice (e.g. an English voice for
+    # an English-language Reel) without this function needing to know
+    # about jarvis.reel_generator at all. `rate` is a plain SSML
+    # <prosody rate="..."> value (Azure accepts "x-slow"/"slow"/
+    # "medium"/"fast"/"x-fast", a percentage like "+10%", or a bare
+    # multiplier like "1.1") - "medium" (i.e. no change from the voice's
+    # own natural pace) is the same behavior as before this parameter
+    # existed, so every pre-existing caller (speak()'s own playback
+    # path) is completely unaffected.
     escaped = (
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         .replace('"', "&quot;").replace("'", "&apos;")
     )
+    lang = "-".join(voice_name.split("-")[:2]) if "-" in voice_name else "lt-LT"
+    inner = f'<prosody rate="{rate}">{escaped}</prosody>' if rate != "medium" else escaped
     return (
-        '<speak version="1.0" xml:lang="lt-LT">'
-        f'<voice xml:lang="lt-LT" name="{_AZURE_NEURAL_VOICE_NAME}">{escaped}</voice>'
+        f'<speak version="1.0" xml:lang="{lang}">'
+        f'<voice xml:lang="{lang}" name="{voice_name}">{inner}</voice>'
         "</speak>"
     )
 
@@ -173,22 +187,26 @@ def _play_wav_bytes(wav_bytes: bytes) -> bool:
     return True
 
 
-def _speak_via_azure_neural_tts(text: str, *, key: str, region: str) -> bool:
-    """Synthesizes `text` as Lithuanian speech via Azure Cognitive
-    Services Speech (Neural TTS) and plays it. Returns False (never
-    raises) for any network/credential/audio failure - a network call
-    to a paid (F0 free-tier) cloud service is exactly the kind of
-    external dependency that must degrade to the next fallback tier
-    rather than crash voice mode."""
+def _synthesize_azure_neural_tts_bytes(
+    text: str, *, key: str, region: str, voice_name: str = _AZURE_NEURAL_VOICE_NAME, rate: str = "medium",
+) -> bytes | None:
+    """Synthesizes `text` via Azure Cognitive Services Speech (Neural
+    TTS) and returns the raw WAV bytes (riff-24khz-16bit-mono-pcm,
+    directly playable/writable, no further decoding needed), or None
+    (never raises) for any network/credential failure - shared by both
+    _speak_via_azure_neural_tts() (plays it immediately) and
+    synthesize_to_file() (saves it to disk instead of/as well as
+    playing it) below, so the actual HTTP/SSML logic exists in exactly
+    one place."""
     import urllib.error
     import urllib.request
 
     access_token = _fetch_azure_access_token(key, region)
     if access_token is None:
-        return False
+        return None
 
     url = _AZURE_TTS_URL_TEMPLATE.format(region=region)
-    body = _build_azure_ssml(text).encode("utf-8")
+    body = _build_azure_ssml(text, voice_name=voice_name, rate=rate).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=body,
@@ -202,11 +220,122 @@ def _speak_via_azure_neural_tts(text: str, *, key: str, region: str) -> bool:
     )
     try:
         with urllib.request.urlopen(request, timeout=_AZURE_REQUEST_TIMEOUT_SECONDS) as response:
-            audio_bytes = response.read()
+            return response.read()
     except (urllib.error.URLError, TimeoutError, OSError):
-        return False
+        return None
 
+
+def _speak_via_azure_neural_tts(text: str, *, key: str, region: str) -> bool:
+    """Synthesizes `text` as Lithuanian speech via Azure Cognitive
+    Services Speech (Neural TTS) and plays it. Returns False (never
+    raises) for any network/credential/audio failure - a network call
+    to a paid (F0 free-tier) cloud service is exactly the kind of
+    external dependency that must degrade to the next fallback tier
+    rather than crash voice mode."""
+    audio_bytes = _synthesize_azure_neural_tts_bytes(text, key=key, region=region)
+    if audio_bytes is None:
+        return False
     return _play_wav_bytes(audio_bytes)
+
+
+def is_file_synthesis_configured() -> bool:
+    """True if a real, file-savable TTS provider is configured -
+    AZURE_SPEECH_KEY/AZURE_SPEECH_REGION are the only tier of speak()'s
+    own three-tier fallback (see module docstring) that produces
+    inspectable audio BYTES at all: tier 1 (local Windows SAPI voice)
+    and tier 3 (default SAPI voice) both speak directly through the
+    speaker via pyttsx3/engine.runAndWait(), with no supported way to
+    capture that audio to a WAV file without a real, separate on-disk
+    audio-capture layer this codebase does not have - so a caller
+    needing a REAL saved voiceover file (jarvis.reel_generator.voiceover)
+    must check this first and show a clear "not configured" notice
+    rather than silently produce no file, or a file assembled by fakery,
+    when only tiers 1/3 are available."""
+    return bool(AZURE_SPEECH_KEY and AZURE_SPEECH_REGION)
+
+
+@dataclass
+class SynthesizeToFileResult:
+    """synthesize_to_file()'s outcome. `ok` is False when nothing could
+    be synthesized (not configured, network/credential failure) -
+    `error` then holds a human-readable reason. `output_path` is set
+    only on success and always refers to a real, non-empty WAV file
+    that was actually written to disk."""
+
+    ok: bool
+    output_path: Path | None = None
+    error: str | None = None
+
+
+def synthesize_to_file(
+    text: str, *, output_path: Path, voice_name: str = _AZURE_NEURAL_VOICE_NAME, rate: str = "medium",
+) -> SynthesizeToFileResult:
+    """Synthesizes `text` via Azure Neural TTS and writes the resulting
+    WAV audio to `output_path` - never plays it. This is the file-based
+    counterpart to speak() (which only ever plays audio through the
+    speaker, never saves it - see that function's own docstring), built
+    for callers needing a real, durable audio FILE (e.g.
+    jarvis.reel_generator.voiceover, to later mux into an exported
+    video) rather than an immediate spoken reply.
+
+    Returns ok=False with a clear, actionable `error` (never raises,
+    matching this module's own established "never fail silently, never
+    fake success" convention) when:
+    - `text` is blank (nothing to synthesize)
+    - AZURE_SPEECH_KEY/AZURE_SPEECH_REGION are not both set (see
+      is_file_synthesis_configured()) - there is genuinely no other
+      file-savable TTS tier in this codebase (see that function's own
+      docstring for exactly why SAPI can't fill this role)
+    - the real Azure request itself fails (network/credentials/quota)
+    - the response bytes aren't valid WAV audio
+    - the file couldn't be written to `output_path` (disk/permissions)
+
+    `voice_name` defaults to the same Lithuanian Neural voice speak()
+    uses (lt-LT-OnaNeural) - a caller wanting a different configured
+    Azure Neural voice (e.g. for an English-language Reel) passes one
+    explicitly; this function does no validation of the name itself
+    beyond passing it straight into the SSML request (Azure itself
+    returns a clear error for an unknown voice name, surfaced here as
+    this result's own `error`). `rate` is a plain SSML prosody rate
+    (see _build_azure_ssml()'s own docstring for accepted values) -
+    "medium" (the default) is the voice's natural pace, unchanged from
+    every pre-existing caller's behavior."""
+    if not text or not text.strip():
+        return SynthesizeToFileResult(ok=False, error="There is no narration text to synthesize.")
+
+    if not is_file_synthesis_configured():
+        return SynthesizeToFileResult(
+            ok=False,
+            error=(
+                "Voiceover generation is not configured yet. Set the AZURE_SPEECH_KEY and "
+                "AZURE_SPEECH_REGION environment variables (Azure Cognitive Services Speech, "
+                "Neural TTS) to enable it."
+            ),
+        )
+
+    assert AZURE_SPEECH_KEY is not None and AZURE_SPEECH_REGION is not None  # is_file_synthesis_configured() just confirmed this
+    audio_bytes = _synthesize_azure_neural_tts_bytes(
+        text, key=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION, voice_name=voice_name, rate=rate,
+    )
+    if audio_bytes is None:
+        return SynthesizeToFileResult(
+            ok=False,
+            error="The Azure Speech request failed (network error, invalid credentials, or quota exceeded).",
+        )
+
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb"):
+            pass  # validating the response really is well-formed WAV before writing it to disk
+    except (wave.Error, EOFError, struct.error):
+        return SynthesizeToFileResult(ok=False, error="Azure Speech returned data that wasn't valid audio.")
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(audio_bytes)
+    except OSError as e:
+        return SynthesizeToFileResult(ok=False, error=f"Couldn't save the voiceover file: {e}")
+
+    return SynthesizeToFileResult(ok=True, output_path=output_path)
 
 
 def speak(text: str) -> SpeakResult:

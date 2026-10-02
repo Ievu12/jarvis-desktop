@@ -24,6 +24,13 @@ NAV_ITEMS = (
     ("stripe", "💳", "Stripe"),
     ("content", "✨", "Content"),
     ("analytics", "📊", "Analytics"),
+    ("instagram_ai_manager", "📱", "Instagram AI Manager"),
+    ("video_studio", "🎬", "AI Video Studio"),
+    ("design_studio", "🎨", "AI Design Studio"),
+    ("reel_generator", "🎞️", "AI Reel Generator"),
+    ("story_generator", "📖", "AI Storytelling Generator"),
+    ("content_studio", "🗂️", "AI Content Studio"),
+    ("video_editor", "🎛️", "Video Editor"),
     ("automations", "⚙️", "Automations"),
     ("settings", "🛠️", "Settings"),
 )

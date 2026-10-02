@@ -103,7 +103,9 @@ from jarvis.tools.stripe_tools import (
     ListRecentChargesTool,
     ListRecentPaymentIntentsTool,
 )
+from jarvis.tools.reel_chat import CreateReelDraftTool
 from jarvis.tools.tasks import ManageTasksTool
+from jarvis.tools.video_studio_tools import ListVideoStudioProjectsTool
 from jarvis.tools.workflow_state import WorkflowStateTool
 
 
@@ -150,6 +152,8 @@ def build_registry() -> ToolRegistry:
     registry.register(CompareInstagramHistoryTool())
     registry.register(ListInstagramCommentsTool())
     registry.register(ListRecentInstagramMessagesTool())
+    registry.register(ListVideoStudioProjectsTool())
+    registry.register(CreateReelDraftTool())
     return registry
 
 
@@ -177,6 +181,30 @@ def run_startup_checks() -> None:
     notice = ensure_jarvis_dir_gitignored(JARVIS_ROOT)
     if notice:
         print(f"[notice] {notice}")
+
+
+def _build_llm_or_exit(project_notes: str | None) -> LLMClient:
+    """Shared LLMClient construction for the interactive REPL (main())
+    and 'jarvis voice' (run_cli_voice()) - the two CLI paths that
+    unconditionally need a real, working Claude API client to do
+    anything at all (unlike scan/plan/work/task/run/review/precommit/
+    commit, which work with no API key). Prints a clear, actionable
+    message and exits cleanly (never an unhandled traceback) if
+    construction fails for either reason LLMClient.__init__() can raise:
+    RuntimeError (ANTHROPIC_API_KEY not set) or ImportError (the real
+    'anthropic' package itself couldn't be loaded - e.g. Windows Smart
+    App Control blocking its own 'jiter' dependency on this machine -
+    see jarvis.core.llm's own docstring for the full "JARVIS won't open
+    at all" bug fix this CLI-side instance of the same problem class is
+    part of)."""
+    try:
+        return LLMClient(project_notes=project_notes)
+    except RuntimeError as e:
+        print(f"[JARVIS] {e}")
+        sys.exit(1)
+    except ImportError as e:
+        print(f"[JARVIS] AI funkcijos nepasiekiamos - Claude API biblioteka nepavyko įkelti:\n{e}")
+        sys.exit(1)
 
 
 def _handle_history_command(command: str) -> None:
@@ -435,7 +463,16 @@ def _try_suggest_commit_message(staged_files: list[str]) -> str | None:
         return None
     try:
         llm = LLMClient()
-    except RuntimeError:
+    except (RuntimeError, ImportError):
+        # RuntimeError: no API key (already checked above, kept for
+        # defense-in-depth). ImportError: the real 'anthropic' package
+        # itself couldn't be loaded (e.g. Windows Smart App Control
+        # blocking its own 'jiter' dependency - see jarvis.core.llm's
+        # own docstring for the full "JARVIS won't open at all" bug fix
+        # this is a real, reported CLI-side instance of) - either way,
+        # this is a best-effort ENHANCEMENT, so falling back to no
+        # suggestion (same as the ANTHROPIC_API_KEY-not-set case above)
+        # is correct, never a crash.
         return None
     diff = get_staged_diff()
     return suggest_commit_message(llm, staged_files, diff)
@@ -585,7 +622,7 @@ def run_cli_voice() -> None:
     if notes_result.notice:
         print(f"[notice] {notes_result.notice}")
 
-    llm = LLMClient(project_notes=notes_result.content)
+    llm = _build_llm_or_exit(notes_result.content)
     registry = build_registry()
     agent = Agent(llm, registry)
 
@@ -724,7 +761,7 @@ def main() -> None:
     if notes_result.notice:
         print(f"[notice] {notes_result.notice}")
 
-    llm = LLMClient(project_notes=notes_result.content)
+    llm = _build_llm_or_exit(notes_result.content)
     registry = build_registry()
     agent = Agent(llm, registry)
 

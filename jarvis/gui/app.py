@@ -60,6 +60,13 @@ from jarvis.gui.settings_store import UpdateSettings, load_update_settings, save
 from jarvis.gui.sidebar import Sidebar
 from jarvis.gui.updater import UpdateCheckResult, default_download_dir
 from jarvis.gui.views.home import HomeView
+from jarvis.gui.views.instagram_ai_manager.dashboard import InstagramAIManagerView
+from jarvis.gui.views.content_studio.dashboard import ContentStudioView
+from jarvis.gui.views.design_studio.dashboard import DesignStudioView
+from jarvis.gui.views.reel_generator.dashboard import ReelGeneratorView
+from jarvis.gui.views.story_generator.dashboard import StoryGeneratorView
+from jarvis.gui.views.video_studio.dashboard import VideoStudioView
+from jarvis.gui.views.video_editor.dashboard import VideoEditorView
 from jarvis.gui.views.simple_panels import (
     AnalyticsView,
     AutomationsView,
@@ -84,6 +91,7 @@ from jarvis.gui.worker import (
     run_update_install_in_background,
 )
 from jarvis.session.store import load_history, save_history
+from jarvis.tools.reel_navigation import consume_navigation_request
 
 # How often (ms) the main thread polls the background-result queue - see
 # jarvis.gui.worker's module docstring for why polling (not a direct
@@ -131,6 +139,42 @@ class JarvisApp:
         self._settings_window: ctk.CTkToplevel | None = None
         self._views: dict[str, Any] = {}  # ctk frame subclasses (Any: no single common CTk frame base type across widget kinds)
         self._current_view_key = "home"
+
+        # Built before _build_widgets() so the Instagram AI Manager view
+        # (and any future view needing raw LLM access for isolated,
+        # tool-free generation calls - see jarvis.instagram_ai_manager
+        # .ai_services) can receive it at construction time. None when no
+        # API key is configured, exactly like self.agent below - views
+        # that hold it must handle None the same way Chat already does.
+        #
+        # Real, reported bug fix ("JARVIS won't open at all:
+        # ImportError: DLL load failed while importing jiter"): even
+        # with jarvis.core.llm's own import now deferred (see that
+        # module's own docstring), LLMClient(...) is still constructed
+        # RIGHT HERE, before any widget exists - if the real `anthropic`
+        # package itself cannot be imported on this machine (Windows
+        # Smart App Control blocking its own `jiter` dependency, a real,
+        # previously-documented per-machine limitation - see this
+        # project's own RELEASE.md), the ImportError LLMClient.__init__()
+        # now raises with a clear message would otherwise still propagate
+        # straight out of App.__init__() and take the whole GUI down
+        # before a single window ever appeared - ANTHROPIC_API_KEY being
+        # set says nothing about whether the package can actually be
+        # imported. Caught here and degraded to the SAME "AI is
+        # unavailable" state ANTHROPIC_API_KEY-not-set already produces
+        # (self.llm = None) - every view already handles that case - the
+        # ONLY difference is the person now ALSO sees why, in the
+        # transcript, once _init_backend() below can actually append to
+        # it (self.transcript doesn't exist yet at this exact point -
+        # _build_widgets() creates it - so the message itself is queued
+        # here and shown from there instead).
+        self._llm_unavailable_reason: str | None = None
+        self.llm: LLMClient | None = None
+        if ANTHROPIC_API_KEY:
+            try:
+                self.llm = LLMClient(project_notes=load_project_notes(JARVIS_ROOT).content)
+            except ImportError as e:
+                self._llm_unavailable_reason = str(e)
 
         self._build_widgets()
         self._init_backend()
@@ -257,16 +301,48 @@ class JarvisApp:
         self._views["analytics"] = AnalyticsView(
             self.content_area, submit_chat_message=self.submit_chat_message, navigate=self._navigate,
         )
+        self._views["instagram_ai_manager"] = InstagramAIManagerView(self.content_area, llm=self.llm)
+        self._views["video_studio"] = VideoStudioView(
+            self.content_area, llm=self.llm, navigate=self._navigate,
+        )
+        self._views["design_studio"] = DesignStudioView(
+            self.content_area, llm=self.llm, navigate=self._navigate,
+        )
+        self._views["reel_generator"] = ReelGeneratorView(
+            self.content_area, llm=self.llm, navigate=self._navigate,
+        )
+        self._views["story_generator"] = StoryGeneratorView(
+            self.content_area, llm=self.llm, navigate=self._navigate,
+        )
+        self._views["content_studio"] = ContentStudioView(
+            self.content_area, llm=self.llm, navigate=self._navigate,
+        )
+        self._views["video_editor"] = VideoEditorView(
+            self.content_area, llm=self.llm, navigate=self._navigate,
+        )
         self._views["automations"] = AutomationsView(self.content_area)
 
     # --- navigation ----------------------------------------------------------------------
 
-    def _navigate(self, key: str) -> None:
+    def _navigate(self, key: str, *, open_project_id: str | None = None) -> None:
         """Switches the visible dashboard panel. 'settings' is handled
         specially: it opens the existing Settings popup
         (_open_settings_window(), unchanged from before this redesign)
         rather than becoming a panel, and does not change which panel
-        is behind it - see that method's own docstring for why."""
+        is behind it - see that method's own docstring for why.
+
+        `open_project_id`, if given, is passed to the target view's own
+        `open_project(project_id)` method (if it has one) AFTER
+        refresh() - used by jarvis.content_studio's own "Preview /
+        Continue" action to open a SPECIFIC already-created linked
+        jarvis.reel_generator/jarvis.design_studio project, rather than
+        just switching to that module's generic dashboard view (see
+        jarvis.gui.views.reel_generator.dashboard.ReelGeneratorView
+        .open_project()'s own docstring for the full integration
+        rationale). This parameter is keyword-only and defaults to None
+        so every existing `Callable[[str], None]`-typed caller (the vast
+        majority of this app's own navigate() usages) keeps working
+        completely unchanged."""
         if key == "settings":
             self._open_settings_window()
             self.sidebar.set_active(self._current_view_key)
@@ -292,6 +368,11 @@ class JarvisApp:
         refresh = getattr(view, "refresh", None)
         if callable(refresh):
             refresh()
+
+        if open_project_id is not None:
+            open_project = getattr(view, "open_project", None)
+            if callable(open_project):
+                open_project(open_project_id)
 
     def submit_chat_message(self, text: str) -> None:
         """Public entry point for any view (Home's Quick Actions,
@@ -325,13 +406,34 @@ class JarvisApp:
             self.agent = None
             return
 
+        if self._llm_unavailable_reason is not None:
+            # Real, reported bug fix ("JARVIS won't open at all") - the
+            # __init__() try/except above already caught this and
+            # degraded self.llm to None; this is the first point where
+            # self.transcript actually exists to tell the person WHY,
+            # instead of the app either crashing outright (the original
+            # bug) or silently behaving as if no API key were configured
+            # at all (which would be its own, different, confusing
+            # symptom - "I set the key, why does it still say
+            # unconfigured?").
+            self._append_transcript(
+                "jarvis",
+                "AI funkcijos šiuo metu nepasiekiamos - Claude API biblioteka nepavyko "
+                f"įkelti:\n{self._llm_unavailable_reason}",
+            )
+            self.agent = None
+            return
+
         notes_result = load_project_notes(JARVIS_ROOT)
         if notes_result.notice:
             self._append_transcript("jarvis", f"[notice] {notes_result.notice}")
 
-        llm = LLMClient(project_notes=notes_result.content)
+        # self.llm was already constructed in __init__ (before
+        # _build_widgets()) so dashboard views could receive it - reused
+        # here rather than building a second LLMClient.
+        assert self.llm is not None  # guaranteed by the two checks above (API key set AND import succeeded)
         registry = _build_registry()
-        self.agent = Agent(llm, registry)
+        self.agent = Agent(self.llm, registry)
 
         load_result = load_history()
         if load_result.warning:
@@ -426,6 +528,16 @@ class JarvisApp:
             reply = result.reply or ""
             self._append_transcript("jarvis", reply)
             save_history(self._history)
+            # Checked after EVERY agent step, whether or not this turn's
+            # own tool calls requested a navigation - a no-op the vast
+            # majority of the time (consume_navigation_request() returns
+            # None unless jarvis.tools.reel_chat.CreateReelDraftTool just
+            # ran) - see jarvis.tools.reel_navigation's own docstring for
+            # why this side channel exists instead of extending
+            # AgentStepResult/Agent.step()'s own shared return shape.
+            pending_project_id = consume_navigation_request()
+            if pending_project_id is not None:
+                self._navigate("reel_generator", open_project_id=pending_project_id)
             if self.voice_enabled and reply.strip():
                 self._set_status(_STATUS_SPEAKING)
                 run_speak_in_background(reply, self.result_queue)

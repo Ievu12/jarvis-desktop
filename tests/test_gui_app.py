@@ -236,6 +236,37 @@ def test_agent_step_result_does_not_speak_when_voice_disabled(built_app):
     mock_speak.assert_not_called()
 
 
+def test_agent_step_result_navigates_when_reel_draft_was_created(built_app):
+    # jarvis.tools.reel_chat.CreateReelDraftTool's own real-world flow:
+    # it calls jarvis.tools.reel_navigation.request_navigation() as a
+    # side effect of its own run() - this confirms _handle_result()
+    # picks that up after the agent step and opens AI Reel Generator on
+    # the right project, the same open_project_id mechanism Content
+    # Studio's own "Preview / Continue" hand-off already uses.
+    from jarvis.tools import reel_navigation
+
+    reel_navigation.request_navigation("some-reel-project-id")
+    target_view = built_app._views["reel_generator"]
+    with patch("jarvis.gui.app.save_history"), \
+         patch("jarvis.gui.app.run_speak_in_background"), \
+         patch.object(target_view, "open_project") as mock_open_project:
+        built_app._handle_result(AgentStepResult(reply="Reel draft created.", error=None))
+    mock_open_project.assert_called_once_with("some-reel-project-id")
+    built_app._navigate("home")
+
+
+def test_agent_step_result_does_not_navigate_when_no_reel_draft_was_created(built_app):
+    from jarvis.tools import reel_navigation
+
+    assert reel_navigation.consume_navigation_request() is None  # confirm nothing pending
+    target_view = built_app._views["reel_generator"]
+    with patch("jarvis.gui.app.save_history"), \
+         patch("jarvis.gui.app.run_speak_in_background"), \
+         patch.object(target_view, "open_project") as mock_open_project:
+        built_app._handle_result(AgentStepResult(reply="just a normal reply", error=None))
+    mock_open_project.assert_not_called()
+
+
 # --- ListenTaskResult handling: microphone flow -------------------------------------
 
 
@@ -395,6 +426,94 @@ def test_update_install_result_failure_message(built_app):
     assert "disk full" in content
 
 
+# --- Instagram AI Manager nav wiring --------------------------------------------------
+
+
+def test_navigating_to_instagram_ai_manager_shows_its_view(built_app):
+    from jarvis.gui.views.instagram_ai_manager.dashboard import InstagramAIManagerView
+
+    assert isinstance(built_app._views["instagram_ai_manager"], InstagramAIManagerView)
+    built_app._navigate("instagram_ai_manager")
+    assert built_app._current_view_key == "instagram_ai_manager"
+    built_app._navigate("home")  # leave shared built_app on its default view for other tests
+
+
+# --- AI Video Studio nav wiring ------------------------------------------------------
+
+
+def test_navigating_to_video_studio_shows_its_view(built_app):
+    from jarvis.gui.views.video_studio.dashboard import VideoStudioView
+
+    assert isinstance(built_app._views["video_studio"], VideoStudioView)
+    built_app._navigate("video_studio")
+    assert built_app._current_view_key == "video_studio"
+    built_app._navigate("home")  # leave shared built_app on its default view for other tests
+
+
+def test_navigating_to_design_studio_shows_its_view(built_app):
+    from jarvis.gui.views.design_studio.dashboard import DesignStudioView
+
+    assert isinstance(built_app._views["design_studio"], DesignStudioView)
+    built_app._navigate("design_studio")
+    assert built_app._current_view_key == "design_studio"
+    built_app._navigate("home")  # leave shared built_app on its default view for other tests
+
+
+def test_navigating_to_content_studio_shows_its_view(built_app):
+    from jarvis.gui.views.content_studio.dashboard import ContentStudioView
+
+    assert isinstance(built_app._views["content_studio"], ContentStudioView)
+    built_app._navigate("content_studio")
+    assert built_app._current_view_key == "content_studio"
+    built_app._navigate("home")  # leave shared built_app on its default view for other tests
+
+
+# --- Content Studio -> Reel/Design Studio handoff (open_project_id) ------------------
+
+
+def test_navigate_with_open_project_id_calls_open_project_on_target_view(built_app):
+    # Regression test for the Content Studio -> Reel Generator handoff
+    # bug: clicking "Preview / Continue" on a linked Reel must open THAT
+    # SPECIFIC project, not just the Reel Generator's generic empty
+    # dashboard - _navigate()'s own open_project_id keyword argument is
+    # the fix; this confirms it actually reaches the target view's own
+    # open_project() method with the right id.
+    target_view = built_app._views["reel_generator"]
+    with patch.object(target_view, "open_project") as mock_open_project:
+        built_app._navigate("reel_generator", open_project_id="some-reel-project-id")
+        mock_open_project.assert_called_once_with("some-reel-project-id")
+    built_app._navigate("home")
+
+
+def test_navigate_with_open_project_id_works_for_design_studio_too(built_app):
+    target_view = built_app._views["design_studio"]
+    with patch.object(target_view, "open_project") as mock_open_project:
+        built_app._navigate("design_studio", open_project_id="some-design-project-id")
+        mock_open_project.assert_called_once_with("some-design-project-id")
+    built_app._navigate("home")
+
+
+def test_navigate_without_open_project_id_does_not_call_open_project(built_app):
+    # Every OTHER existing caller of navigate() (Callable[[str], None] -
+    # a single positional string, no keyword) must keep working exactly
+    # as before - open_project() must never be called unless
+    # open_project_id was explicitly passed.
+    target_view = built_app._views["reel_generator"]
+    with patch.object(target_view, "open_project") as mock_open_project:
+        built_app._navigate("reel_generator")
+        mock_open_project.assert_not_called()
+    built_app._navigate("home")
+
+
+def test_navigate_with_open_project_id_on_a_view_without_open_project_does_not_raise(built_app):
+    # instagram_ai_manager's own view has no open_project() method -
+    # passing open_project_id for it must be a harmless no-op, not a
+    # crash (getattr(..., None) + callable() guard in _navigate()).
+    built_app._navigate("instagram_ai_manager", open_project_id="irrelevant")
+    assert built_app._current_view_key == "instagram_ai_manager"
+    built_app._navigate("home")
+
+
 # --- shutdown: restores terminal approval handlers -----------------------------------
 
 
@@ -426,6 +545,116 @@ def test_missing_api_key_does_not_crash_and_shows_notice(no_api_key_app):
     content = no_api_key_app.transcript.get("1.0", "end")
     no_api_key_app.transcript.configure(state="disabled")
     assert "ANTHROPIC_API_KEY" in content
+
+
+# --- anthropic package unavailable (e.g. Windows Smart App Control blocking its own ------
+# jiter dependency) degrades gracefully instead of taking the whole GUI down --------------
+#
+# Real, reported bug fix: "JARVIS won't open at all: ImportError: DLL load
+# failed while importing jiter" - jarvis.core.llm used to `import anthropic`
+# at MODULE level, so constructing LLMClient() here in App.__init__()
+# (whenever ANTHROPIC_API_KEY IS set - a real API key being configured says
+# nothing about whether the package can actually be imported on this
+# machine) would let that ImportError propagate straight out of __init__()
+# and crash the whole app before a single window ever appeared. These tests
+# confirm the fix: the app now degrades to the SAME "AI unavailable" state
+# ANTHROPIC_API_KEY-not-set already produces, plus a specific transcript
+# message explaining WHY.
+
+
+def _construct_app_with_llm_import_error(*, error_message: str = "DLL load failed while importing jiter: An Application Control policy has blocked this file."):
+    """Same construction as _construct_app() (a real API key IS set, so
+    __init__() attempts LLMClient(...)), except LLMClient itself is
+    patched to raise ImportError, simulating the real jiter/Smart App
+    Control block without depending on whether this test machine
+    actually has it right now."""
+    with patch("jarvis.gui.app.ANTHROPIC_API_KEY", "fake-key"):
+        with patch("jarvis.gui.app.LLMClient", side_effect=ImportError(error_message)):
+            with patch("jarvis.gui.app._build_registry", return_value=MagicMock()):
+                with patch("jarvis.gui.app.Agent"):
+                    with patch("jarvis.gui.app.load_history") as mock_load_history:
+                        mock_load_history.return_value = MagicMock(warning=None, history=[])
+                        with patch("jarvis.gui.app.load_project_notes") as mock_notes:
+                            mock_notes.return_value = MagicMock(notice=None, content=None)
+                            with patch(
+                                "jarvis.gui.app.load_update_settings",
+                                return_value=UpdateSettings(check_for_updates=False),
+                            ):
+                                application = gui_app.JarvisApp()
+    application.root.withdraw()
+    return application
+
+
+def test_llm_import_error_does_not_crash_app_construction():
+    # The actual bug this fixes: App.__init__() must complete
+    # successfully (a real window can be shown) even when LLMClient(...)
+    # raises ImportError, not just RuntimeError (missing key) - before
+    # this fix, this call would have raised straight out of this test.
+    application = _construct_app_with_llm_import_error()
+    try:
+        assert application.root is not None
+    finally:
+        application.root.destroy()
+
+
+def test_llm_import_error_degrades_to_no_llm_and_no_agent():
+    application = _construct_app_with_llm_import_error()
+    try:
+        assert application.llm is None
+        assert application.agent is None
+    finally:
+        application.root.destroy()
+
+
+def test_llm_import_error_shows_specific_reason_in_transcript():
+    # Real, reported requirement: the person must see WHY AI is
+    # unavailable, not just that it is - distinguishing this from the
+    # ANTHROPIC_API_KEY-not-set case (test_missing_api_key_does_not_crash
+    # _and_shows_notice above), which is a different, separate situation
+    # (a real key IS set here; the package itself couldn't load).
+    application = _construct_app_with_llm_import_error(
+        error_message="DLL load failed while importing jiter: An Application Control policy has blocked this file.",
+    )
+    try:
+        application.transcript.configure(state="normal")
+        content = application.transcript.get("1.0", "end")
+        application.transcript.configure(state="disabled")
+        assert "jiter" in content
+        assert "Application Control" in content
+    finally:
+        application.root.destroy()
+
+
+def test_llm_import_error_does_not_mention_api_key_not_configured():
+    # The two failure messages must stay distinguishable - a real key IS
+    # configured in this scenario, so the OTHER message
+    # ("ANTHROPIC_API_KEY nenustatytas") must never appear here, or a
+    # person would be misled into thinking they need to set a key that's
+    # already set.
+    application = _construct_app_with_llm_import_error()
+    try:
+        application.transcript.configure(state="normal")
+        content = application.transcript.get("1.0", "end")
+        application.transcript.configure(state="disabled")
+        assert "ANTHROPIC_API_KEY nenustatytas" not in content
+    finally:
+        application.root.destroy()
+
+
+def test_llm_import_error_still_builds_all_dashboard_views():
+    # Real, reported requirement: "Išsaugok visas esamas JARVIS funkcijas"
+    # - every dashboard view (Reel Generator, Instagram AI Manager, etc.)
+    # must still construct successfully with self.llm=None, exactly as
+    # they already do for the ANTHROPIC_API_KEY-not-set case - this
+    # failure mode must not be treated any differently by the rest of
+    # the app.
+    application = _construct_app_with_llm_import_error()
+    try:
+        assert "reel_generator" in application._views
+        assert "instagram_ai_manager" in application._views
+        assert "video_studio" in application._views
+    finally:
+        application.root.destroy()
 
 
 # --- approval handlers are redirected to a GUI dialog at construction --------------

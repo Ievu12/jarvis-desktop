@@ -8,11 +8,19 @@ jarvis.integrations.connectors.stripe.StripeConnector), the five
 read-only Gmail tools (bridging the agent to jarvis.integrations
 .connectors.gmail.GmailConnector), the three read-only Google Calendar
 tools (bridging the agent to jarvis.integrations.connectors
-.google_calendar.GoogleCalendarConnector), and the eleven read-only
+.google_calendar.GoogleCalendarConnector), the eleven read-only
 Instagram tools (bridging the agent to jarvis.integrations.connectors
-.instagram.InstagramConnector). A tool missing from this registry would
-be silently unavailable to the model even if fully implemented and
-tested elsewhere."""
+.instagram.InstagramConnector), the one read-only AI Video Studio
+tool (bridging the agent to jarvis.video_studio.db - see
+jarvis.tools.video_studio_tools' own docstring for why it is
+deliberately read-only-status-only, never triggering any part of the
+actual video pipeline), and the one Reel-draft-creation tool (bridging
+the agent to jarvis.reel_generator - see jarvis.tools.reel_chat's own
+docstring for why it only ever creates a DRAFT project via the normal
+Reel Generator pipeline, never auto-approves/exports/publishes
+anything). A tool missing from this registry would be silently
+unavailable to the model even if fully implemented and tested
+elsewhere."""
 
 from __future__ import annotations
 
@@ -69,6 +77,8 @@ def test_registry_includes_all_expected_tool_names():
         "compare_instagram_history",
         "list_instagram_comments",
         "list_recent_instagram_messages",
+        "list_video_studio_projects",
+        "create_reel_draft",
     }
 
 
@@ -126,3 +136,13 @@ def test_registry_includes_all_eleven_instagram_tools():
         "list_instagram_comments", "list_recent_instagram_messages",
     ):
         assert registry.get(name) is not None
+
+
+def test_registry_includes_the_video_studio_tool():
+    registry = build_registry()
+    assert registry.get("list_video_studio_projects") is not None
+
+
+def test_registry_includes_the_create_reel_draft_tool():
+    registry = build_registry()
+    assert registry.get("create_reel_draft") is not None

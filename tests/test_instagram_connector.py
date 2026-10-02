@@ -1356,3 +1356,101 @@ def test_instagram_connector_never_touches_google_calendar_token_store():
             with patch("urllib.request.urlopen", return_value=_mock_response({})):
                 InstagramConnector().execute("get_profile")
     mock_calendar_load.assert_not_called()
+
+
+# --- get_recent_media_with_insights (public, structured-data method) ---------------
+# Added for jarvis.instagram_ai_manager.analytics_services, which needs
+# real numbers to compute on rather than execute()'s pre-formatted
+# display text - see that method's own docstring.
+
+
+def test_get_recent_media_with_insights_returns_structured_records():
+    # Route by the account-id-prefixed media-list path and the
+    # insights-suffixed path specifically (not the bare substrings
+    # "/media"/"/insights") - a per-post insights URL like
+    # ".../post_1/insights" itself contains "media" nowhere, but a media
+    # id such as "media_1" WOULD collide with a naive "/media" route
+    # fragment, so post ids here are deliberately named without "media"
+    # in them to keep this test's routing unambiguous.
+    routes = {
+        f"/{_ACCOUNT_ID}/media?": {
+            "data": [
+                {
+                    "id": "post_1", "caption": "First post", "media_type": "IMAGE",
+                    "permalink": "https://instagram.com/p/1", "timestamp": "2026-01-02T10:00:00+0000",
+                },
+                {
+                    "id": "post_2", "caption": "Second post", "media_type": "VIDEO",
+                    "permalink": "https://instagram.com/p/2", "timestamp": "2026-01-01T10:00:00+0000",
+                },
+            ]
+        },
+        "/insights": {
+            "data": [
+                {"name": "likes", "values": [{"value": 10}]},
+                {"name": "reach", "values": [{"value": 200}]},
+            ]
+        },
+    }
+    with _with_tokens(_tokens()):
+        with patch("urllib.request.urlopen", side_effect=_routed_urlopen(routes)):
+            result = InstagramConnector().get_recent_media_with_insights(limit=10)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    first = result[0]
+    assert first["id"] == "post_1"
+    assert first["caption"] == "First post"
+    assert first["media_type"] == "IMAGE"
+    assert first["permalink"] == "https://instagram.com/p/1"
+    assert first["likes"] == 10.0
+    assert first["reach"] == 200.0
+
+
+def test_get_recent_media_with_insights_omits_missing_metrics_never_defaults_to_zero():
+    routes = {
+        f"/{_ACCOUNT_ID}/media?": {"data": [{"id": "post_1", "timestamp": "2026-01-01T00:00:00+0000"}]},
+        "/insights": {"data": [{"name": "likes", "values": [{"value": 5}]}]},  # no "reach" entry at all
+    }
+    with _with_tokens(_tokens()):
+        with patch("urllib.request.urlopen", side_effect=_routed_urlopen(routes)):
+            result = InstagramConnector().get_recent_media_with_insights()
+
+    assert "reach" not in result[0]
+    assert result[0]["likes"] == 5.0
+
+
+def test_get_recent_media_with_insights_empty_media_list_returns_empty_list():
+    routes = {f"/{_ACCOUNT_ID}/media?": {"data": []}, "/insights": {"data": []}}
+    with _with_tokens(_tokens()):
+        with patch("urllib.request.urlopen", side_effect=_routed_urlopen(routes)):
+            result = InstagramConnector().get_recent_media_with_insights()
+    assert result == []
+
+
+def test_get_recent_media_with_insights_respects_limit():
+    with _with_tokens(_tokens()):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=_routed_urlopen({f"/{_ACCOUNT_ID}/media?": {"data": []}, "/insights": {"data": []}}),
+        ) as mock_urlopen:
+            InstagramConnector().get_recent_media_with_insights(limit=7)
+    media_call = next(c for c in mock_urlopen.call_args_list if "/media?" in c.args[0].full_url)
+    assert "limit=7" in media_call.args[0].full_url
+
+
+def test_get_recent_media_with_insights_never_leaks_access_token():
+    routes = {
+        f"/{_ACCOUNT_ID}/media?": {"data": [{"id": "post_1", "timestamp": "2026-01-01T00:00:00+0000"}]},
+        "/insights": {"data": [{"name": "likes", "values": [{"value": 5}]}]},
+    }
+    with _with_tokens(_tokens()):
+        with patch("urllib.request.urlopen", side_effect=_routed_urlopen(routes)):
+            result = InstagramConnector().get_recent_media_with_insights()
+    assert "superSecretInstagramAccessTokenValue12345" not in str(result)
+
+
+def test_get_recent_media_with_insights_raises_credential_error_when_not_configured():
+    with _with_tokens(None):
+        with pytest.raises(CredentialError):
+            InstagramConnector().get_recent_media_with_insights()

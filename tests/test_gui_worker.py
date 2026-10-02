@@ -191,3 +191,51 @@ def test_run_update_install_in_background_posts_error_on_install_failure(tmp_pat
     result = _wait_for_result(result_queue)
     assert result.success is False
     assert result.error == "disk full"
+
+
+# --- run_generation_in_background() -----------------------------------------------
+
+
+def test_run_generation_in_background_posts_the_returned_value():
+    result_queue: "queue.Queue" = queue.Queue()
+    worker.run_generation_in_background(lambda: ["idea 1", "idea 2"], result_queue)
+    result = _wait_for_result(result_queue)
+    assert isinstance(result, worker.GenerationTaskResult)
+    assert result.value == ["idea 1", "idea 2"]
+    assert result.error is None
+
+
+def test_run_generation_in_background_posts_none_value_as_is():
+    # ai_services functions return None on their own documented
+    # failures (not an exception) - that must be posted as value=None,
+    # error=None, not misrepresented as an error.
+    result_queue: "queue.Queue" = queue.Queue()
+    worker.run_generation_in_background(lambda: None, result_queue)
+    result = _wait_for_result(result_queue)
+    assert result.value is None
+    assert result.error is None
+
+
+def test_run_generation_in_background_catches_unexpected_exception():
+    result_queue: "queue.Queue" = queue.Queue()
+
+    def _raising():
+        raise RuntimeError("db write failed")
+
+    worker.run_generation_in_background(_raising, result_queue)
+    result = _wait_for_result(result_queue)
+    assert result.value is None
+    assert result.error == "db write failed"
+
+
+def test_run_generation_in_background_does_not_block_caller():
+    result_queue: "queue.Queue" = queue.Queue()
+
+    def _slow():
+        time.sleep(0.3)
+        return "done"
+
+    started_at = time.monotonic()
+    worker.run_generation_in_background(_slow, result_queue)
+    elapsed = time.monotonic() - started_at
+    assert elapsed < 0.1

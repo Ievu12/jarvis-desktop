@@ -67,6 +67,38 @@ this limitation is specific to launching a freshly-built, unpronounced
 machine without Smart App Control enabled runs the packaged .exe
 normally once the certificate (or a real CA-issued one) is trusted.
 
+## Related, separate finding: Smart App Control also blocks some pip-installed compiled Python extensions
+
+Discovered while adding the Instagram AI Manager Analytics UI (tried
+`matplotlib`, blocked) and the AI Video Studio module (tried
+`faster-whisper`, blocked via its `av`/PyAV dependency) - **this is a
+different mechanism from the .exe-blocking finding above**, and not
+fixable the same way (there is no "sign this .pyd" equivalent):
+
+- Importing `matplotlib` fails with `ImportError: DLL load failed while
+  importing ft2font: An Application Control policy has blocked this
+  file.`
+- Importing `faster_whisper` fails the same way while importing `av`
+  (PyAV)'s `_core` extension.
+- `numpy` and `ctranslate2` (faster-whisper's actual inference engine)
+  import fine on this machine - the block is per-DLL/per-package
+  reputation, not a blanket "no compiled Python extensions" policy, so
+  it is not predictable in advance which package will be blocked.
+
+**Practical implication for future dependencies**: before adding any
+package with a compiled/native component (anything that isn't pure
+Python), verify with a plain `python -c "import <package>"` on this
+machine before building a feature around it - a package that imports
+fine on another machine or in CI can still be blocked here. When
+blocked, prefer shelling out to an already-installed, already-trusted
+native .exe (e.g. `ffmpeg.exe`, confirmed unaffected since Smart App
+Control's block targets *loading an unreputable DLL into python.exe's
+own process*, not python.exe spawning a separate trusted process) over
+a compiled Python extension wrapping the same functionality - this is
+exactly how jarvis.video_studio.transcribe avoids `faster-whisper`
+entirely, using this machine's already-installed ffmpeg's built-in
+`whisper.cpp` audio filter instead.
+
 ## Every release: the exact steps
 
 ### 1. Make the code change
