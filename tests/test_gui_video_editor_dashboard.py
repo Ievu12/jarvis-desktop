@@ -630,13 +630,13 @@ def test_music_file_chosen_without_an_open_project_shows_error(root, tmp_path):
 
 
 @pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
-def test_multitrack_view_updates_when_timeline_and_text_overlays_change(root, tmp_path):
+def test_track_timeline_updates_when_timeline_and_text_overlays_change(root, tmp_path):
     from jarvis.video_editor.text_overlay import TextOverlay
 
     view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
     view._on_new_project_clicked()
     root.update()
-    empty_count = len(view._multitrack_view._canvas.find_all())
+    empty_count = len(view._track_timeline._canvas.find_all())
 
     clip_path = tmp_path / "clip.mp4"
     subprocess.run(
@@ -650,7 +650,7 @@ def test_multitrack_view_updates_when_timeline_and_text_overlays_change(root, tm
 
     view._on_text_overlays_changed([TextOverlay(text="Hi", start_seconds=0.5, end_seconds=1.5)])
     root.update()
-    after_count = len(view._multitrack_view._canvas.find_all())
+    after_count = len(view._track_timeline._canvas.find_all())
 
     assert after_count > empty_count
 
@@ -1262,3 +1262,78 @@ def test_live_preview_quick_add_edit_and_reopen_restores_overlays(root, tmp_path
     assert reopened._text_overlays == [edited_text]
     assert reopened._stickers == [moved]
     assert reopened._preview_panel.selected is None
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_one_undo_history_covers_clips_overlays_and_track_edits(root, tmp_path):
+    """Stage 2: a single Undo/Redo history for every kind of edit -
+    clip list, text/sticker panels, track-timeline drags and the
+    settings panel - plus the keyboard shortcuts."""
+    import dataclasses
+
+    from jarvis.video_editor import track_layout
+
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view.pack(fill="both", expand=True)
+    view._on_new_project_clicked()
+    assert not view._history.can_undo()
+    assert view._undo_button.cget("state") == "disabled"
+
+    photo_path = tmp_path / "photo.png"
+    Image.new("RGB", (1080, 1920), color=(0, 0, 255)).save(photo_path)
+    view._on_files_chosen([photo_path])
+    _drain_queue_until(view, lambda: len(view._media_items) == 1)
+    media = next(iter(view._media_items.values()))
+    view._on_add_to_timeline_clicked(media)  # clip list edit
+    view._on_add_to_timeline_clicked(media)
+    view._on_quick_add_text()  # text panel edit
+    assert len(view._timeline_panel.timeline.items) == 2 and len(view._text_overlays) == 1
+    assert view._undo_button.cget("state") == "normal"
+
+    # a track-timeline edit (live updates don't touch the saved state; the final one does)
+    state = view._editor_state()
+    moved = track_layout.move_overlay(state, "text", 0, 1.5, total=6)
+    view._on_track_state_edited(moved, False, "", None)
+    assert view._text_overlays[0].start_seconds == 0
+    view._on_track_state_edited(moved, True, "Perkelta", None)
+    assert view._text_overlays[0].start_seconds == 1.5
+    assert view._text_overlay_panel._overlays[0].start_seconds == 1.5  # the Text panel follows
+
+    # a clip setting from the settings panel
+    view._on_track_selection_changed(("video", 1))
+    assert view._inspector_panel.shown == ("clip", 1)
+    longer = dataclasses.replace(view._timeline_panel.timeline.items[1], display_duration_seconds=5.0)
+    view._on_element_edited("clip", 1, longer, True)
+    assert view._engine.duration == 8
+
+    view._on_undo()
+    assert view._engine.duration == 6
+    view._on_undo()
+    assert view._text_overlays[0].start_seconds == 0
+    view._on_undo()
+    assert view._text_overlays == [] and view._text_overlay_panel._overlays == []
+    view._on_undo()
+    assert len(view._timeline_panel.timeline.items) == 1
+    view._on_redo()
+    view._on_redo()
+    assert len(view._timeline_panel.timeline.items) == 2 and len(view._text_overlays) == 1
+
+    # the saved project matches what's on screen after undo/redo
+    view._save_overlays_now()
+    reloaded_timeline, _ = storage.load_project(view._current_project.project_id)
+    assert reloaded_timeline == view._timeline_panel.timeline
+    assert storage.load_overlays(view._current_project.project_id).text_overlays == tuple(view._text_overlays)
+
+    # keyboard: Ctrl+Z / Ctrl+Y on the window
+    root.deiconify()
+    root.update()
+    view._track_timeline._canvas.focus_force()
+    root.update()
+    before = view._editor_state()
+    root.event_generate("<Control-z>")
+    root.update()
+    assert view._editor_state() != before
+    root.event_generate("<Control-y>")
+    root.update()
+    assert view._editor_state() == before
+    root.withdraw()

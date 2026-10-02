@@ -50,7 +50,9 @@ class TimelinePanel(ctk.CTkFrame):
     def __init__(
         self, master, *, on_timeline_changed: Callable[[Timeline], None],
         get_thumbnail: Callable[[MediaItem], Path | None],
-        on_preview_requested: Callable[[int], None] | None = None, **kwargs,
+        on_preview_requested: Callable[[int], None] | None = None,
+        on_undo_requested: Callable[[], None] | None = None,
+        on_redo_requested: Callable[[], None] | None = None, **kwargs,
     ) -> None:
         """`get_thumbnail` is supplied by the owning dashboard (which
         has access to the project's own thumbnail cache directory) -
@@ -68,7 +70,13 @@ class TimelinePanel(ctk.CTkFrame):
         dashboard runs it through run_generation_in_background() (the
         same established background-thread convention every other
         possibly-slow action in this package already uses) and calls
-        show_preview_frames() below once real frames are ready."""
+        show_preview_frames() below once real frames are ready.
+
+        `on_undo_requested`/`on_redo_requested`, if given, make this
+        panel's Undo/Redo buttons drive the owning dashboard's
+        project-wide history (text, stickers, captions and music too)
+        instead of this panel's own clips-only one; the dashboard then
+        keeps the buttons' enabled state current via set_history_state()."""
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_timeline_changed = on_timeline_changed
         self._get_thumbnail = get_thumbnail
@@ -78,6 +86,9 @@ class TimelinePanel(ctk.CTkFrame):
         self._preview_containers: dict[int, ctk.CTkFrame] = {}
         self._history = TimelineHistory()
         self._clipboard = TimelineClipboard()
+        self._on_undo_requested = on_undo_requested
+        self._on_redo_requested = on_redo_requested
+        self._external_history_state = (False, False)
 
         header_row = ctk.CTkFrame(self, fg_color="transparent")
         header_row.pack(fill="x")
@@ -132,10 +143,27 @@ class TimelinePanel(ctk.CTkFrame):
         self._on_timeline_changed(self._timeline)
 
     def _update_history_buttons(self) -> None:
-        self._undo_button.configure(state="normal" if self._history.can_undo() else "disabled")
-        self._redo_button.configure(state="normal" if self._history.can_redo() else "disabled")
+        if self._on_undo_requested is not None:
+            can_undo, can_redo = self._external_history_state
+        else:
+            can_undo, can_redo = self._history.can_undo(), self._history.can_redo()
+        self._undo_button.configure(state="normal" if can_undo else "disabled")
+        self._redo_button.configure(state="normal" if can_redo else "disabled")
+
+    def set_history_state(self, *, can_undo: bool, can_redo: bool) -> None:
+        self._external_history_state = (can_undo, can_redo)
+        self._update_history_buttons()
+
+    def show_timeline(self, timeline: Timeline) -> None:
+        """Shows `timeline` (an undo/redo or a track-timeline edit made
+        by the dashboard) without notifying back or touching history."""
+        self._timeline = timeline
+        self._rerender(timeline)
 
     def _on_undo_clicked(self) -> None:
+        if self._on_undo_requested is not None:
+            self._on_undo_requested()
+            return
         restored = self._history.undo()
         self._timeline = restored
         self._update_history_buttons()
@@ -143,6 +171,9 @@ class TimelinePanel(ctk.CTkFrame):
         self._on_timeline_changed(self._timeline)
 
     def _on_redo_clicked(self) -> None:
+        if self._on_redo_requested is not None:
+            self._on_redo_requested()
+            return
         restored = self._history.redo()
         self._timeline = restored
         self._update_history_buttons()

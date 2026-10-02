@@ -40,6 +40,10 @@ from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TextOver
 
 DISPLAY_MAX_WIDTH = 640
 DISPLAY_MAX_HEIGHT = 520
+# The size before the panel knows how much room it has; after that the
+# picture grows/shrinks with the window, up to FIT_MAX_SIDE.
+FIT_MAX_SIDE = 1000
+_MIN_FIT_SIDE = 120
 
 _HANDLE_SIZE = 10
 _ROTATE_HANDLE_DISTANCE = 26
@@ -57,9 +61,18 @@ def format_timecode(seconds: float) -> str:
     return f"{int(minutes):02d}:{secs:04.1f}"
 
 
-def display_size_for(frame_size: tuple[int, int]) -> tuple[int, int]:
+def display_size_for(
+    frame_size: tuple[int, int], available: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """The on-screen picture size: `frame_size`'s aspect ratio, as big
+    as fits `available` (or the default box when that's unknown)."""
     width, height = frame_size
-    ratio = min(DISPLAY_MAX_WIDTH / width, DISPLAY_MAX_HEIGHT / height)
+    if available is None:
+        max_width, max_height = DISPLAY_MAX_WIDTH, DISPLAY_MAX_HEIGHT
+    else:
+        max_width = max(_MIN_FIT_SIDE, min(FIT_MAX_SIDE, available[0]))
+        max_height = max(_MIN_FIT_SIDE, min(FIT_MAX_SIDE, available[1]))
+    ratio = min(max_width / width, max_height / height)
     return max(1, round(width * ratio)), max(1, round(height * ratio))
 
 
@@ -86,7 +99,10 @@ class InteractivePreviewPanel(ctk.CTkFrame):
 
         self._scene = pc.Scene()
         self._canvas_size = (1080, 1920)
-        self._display_size = display_size_for((360, 640))
+        self._frame_size = (360, 640)
+        self._placeholder_message = ""
+        self._available: tuple[int, int] | None = None
+        self._display_size = display_size_for(self._frame_size)
         self._base_frame: Image.Image | None = None
         self._exact_frame: Image.Image | None = None
         self._time = 0.0
@@ -104,7 +120,7 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         header = ctk.CTkFrame(inner, fg_color="transparent")
         header.pack(fill="x", pady=(0, theme.SPACE_SM))
         ctk.CTkLabel(
-            header, text="🖥️ PERŽIŪRA REALIU LAIKU",
+            header, text="🖥️ PERŽIŪRA",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
             text_color=theme.ACCENT_PRIMARY, anchor="w",
         ).pack(side="left")
@@ -114,21 +130,32 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         )
         self._mode_label.pack(side="right")
 
+        # Packed bottom-up so the picture area gets whatever height is
+        # left and the transport row never gets pushed out of view.
+        self._hint_label = ctk.CTkLabel(
+            inner, text="Spauskite tekstą ar lipduką, kad jį perkeltumėte, keistumėte dydį ar pasuktumėte.",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=self._display_size[0], justify="left",
+        )
+        self._hint_label.pack(side="bottom", anchor="w", pady=(theme.SPACE_XS, 0))
+        transport = ctk.CTkFrame(inner, fg_color="transparent")
+        transport.pack(side="bottom", fill="x", pady=(theme.SPACE_SM, 0))
+
+        self._stage = tk.Frame(inner, bg=theme.BG_CARD, highlightthickness=0)
+        self._stage.pack(fill="both", expand=True)
+        self._stage.bind("<Configure>", self._on_stage_resized)
         self._canvas = tk.Canvas(
-            inner, width=self._display_size[0], height=self._display_size[1], bg="#000000",
+            self._stage, width=self._display_size[0], height=self._display_size[1], bg="#000000",
             highlightthickness=0, cursor="hand2",
         )
-        self._canvas.pack(pady=(0, theme.SPACE_SM))
+        self._canvas.place(relx=0.5, rely=0.5, anchor="center")
         self._canvas.bind("<ButtonPress-1>", self._on_press)
         self._canvas.bind("<B1-Motion>", self._on_motion)
         self._canvas.bind("<ButtonRelease-1>", self._on_release)
         self._canvas.bind("<Delete>", self._on_delete_key)
         self._canvas.bind("<BackSpace>", self._on_delete_key)
-        self._canvas.bind("<space>", lambda _e: self._on_play_toggled())
         self._draw_placeholder("Sukurkite projektą ir pridėkite klipą ar nuotrauką.")
 
-        transport = ctk.CTkFrame(inner, fg_color="transparent")
-        transport.pack(fill="x")
         ctk.CTkButton(
             transport, text="⏮", width=36, command=lambda: self._on_seek(0.0),
             fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
@@ -146,13 +173,6 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         self._slider.pack(side="left", fill="x", expand=True)
         self._slider.configure(state="disabled")
 
-        self._hint_label = ctk.CTkLabel(
-            inner, text="Spauskite tekstą ar lipduką, kad jį perkeltumėte, keistumėte dydį ar pasuktumėte.",
-            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
-            text_color=theme.TEXT_MUTED, anchor="w", wraplength=self._display_size[0], justify="left",
-        )
-        self._hint_label.pack(anchor="w", pady=(theme.SPACE_XS, 0))
-
     # --- dashboard-facing API ----------------------------------------------------------------
 
     def configure_canvas(self, *, frame_size: tuple[int, int], canvas_size: tuple[int, int]) -> None:
@@ -160,13 +180,31 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         the export canvas overlays are measured against (1080p of the
         timeline's aspect ratio)."""
         self._canvas_size = canvas_size
-        new_display = display_size_for(frame_size)
-        if new_display != self._display_size:
-            self._display_size = new_display
-            self._canvas.configure(width=new_display[0], height=new_display[1])
-            self._hint_label.configure(wraplength=new_display[0])
+        if frame_size != self._frame_size:
+            self._frame_size = frame_size
             self._base_frame = None
             self._exact_frame = None
+        self._apply_display_size()
+
+    def _on_stage_resized(self, event) -> None:
+        available = (event.width - 4, event.height - 4)
+        if available[0] < 20 or available[1] < 20 or available == self._available:
+            return
+        self._available = available
+        self._apply_display_size()
+
+    def _apply_display_size(self) -> None:
+        new_display = display_size_for(self._frame_size, self._available)
+        if new_display == self._display_size:
+            return
+        self._display_size = new_display
+        self._canvas.configure(width=new_display[0], height=new_display[1])
+        self._hint_label.configure(wraplength=max(200, new_display[0]))
+        # The decoded frames are kept: they are scaled to the new size on redraw.
+        if self._base_frame is None and self._exact_frame is None:
+            self._draw_placeholder(self._placeholder_message)
+        else:
+            self._redraw()
 
     def set_time(self, t: float, duration: float) -> None:
         self._time = t
@@ -243,6 +281,7 @@ class InteractivePreviewPanel(ctk.CTkFrame):
     # --- drawing ------------------------------------------------------------------------------
 
     def _draw_placeholder(self, message: str) -> None:
+        self._placeholder_message = message
         self._canvas.delete("all")
         self._boxes = []
         width, height = self._display_size

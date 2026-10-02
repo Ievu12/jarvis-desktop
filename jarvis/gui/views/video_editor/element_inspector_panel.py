@@ -1,5 +1,6 @@
 """Settings panel for whichever text or sticker is selected in the
-interactive preview (right of the video window). Every control applies
+interactive preview, or clip/photo selected on the track timeline
+(right of the video window). Every control applies
 immediately: sliders and typing update the preview on each change, and
 the edit is committed (saved, synced into the Text/Stickers panels)
 once the person stops for a moment.
@@ -20,6 +21,7 @@ from jarvis.gui.views.video_editor.common import LabeledDropdown
 from jarvis.gui.widgets import Card
 from jarvis.video_editor.stickers import STICKER_ANIMATION_CHOICES, StickerInstance
 from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TEXT_ANIMATION_CHOICES, TextOverlay
+from jarvis.video_editor.timeline import TimelineClip, TimelineStill
 
 _COMMIT_DELAY_MS = 500
 _SWATCHES = ("white", "black", "#FFD700", "#FF6B9D", "#7FDBFF", "#B8F2A0", "#C9A7FF", "#FF7A45")
@@ -68,12 +70,17 @@ class ElementInspectorPanel(ctk.CTkFrame):
         self._kind, self._index, self._element = None, -1, None
         self._clear_body()
         ctk.CTkLabel(
-            self._body, text="Paspauskite tekstą ar lipduką peržiūros lange - čia atsiras jo nustatymai.",
+            self._body, text="Paspauskite tekstą ar lipduką peržiūros lange arba bet kurį elementą laiko juostoje - čia atsiras jo nustatymai.",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),
             text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
         ).pack(anchor="w")
 
-    def show_element(self, kind: str, index: int, element: TextOverlay | StickerInstance) -> None:
+    def show_element(
+        self, kind: str, index: int, element: TextOverlay | StickerInstance | TimelineClip | TimelineStill,
+        *, title: str = "",
+    ) -> None:
+        """`kind` is "text", "sticker" or "clip" (a video clip or photo
+        on the timeline, `title` being its file name)."""
         if (kind, index) == (self._kind, self._index) and type(element) is type(self._element):
             self.refresh_values(element)
             return
@@ -82,8 +89,10 @@ class ElementInspectorPanel(ctk.CTkFrame):
         self._clear_body()
         if isinstance(element, TextOverlay):
             self._build_text_controls(element)
-        else:
+        elif isinstance(element, StickerInstance):
             self._build_sticker_controls(element)
+        else:
+            self._build_clip_controls(element, title)
 
     def refresh_values(self, element: TextOverlay | StickerInstance) -> None:
         """Updates the shown values after an edit made elsewhere (e.g.
@@ -246,6 +255,31 @@ class ElementInspectorPanel(ctk.CTkFrame):
         self._slider("Permatomumas", "opacity", 0.0, 1.0, steps=100, fmt="{:.2f}")
         self._animation_dropdown(STICKER_ANIMATION_CHOICES)
         self._timing_row()
+        self._action_buttons()
+
+    def _build_clip_controls(self, item: TimelineClip | TimelineStill, title: str) -> None:
+        ctk.CTkLabel(
+            self._body, text=f"🎬 {title}" if title else "🎬 Klipas",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
+            text_color=theme.TEXT_PRIMARY, anchor="w", wraplength=240, justify="left",
+        ).pack(anchor="w")
+        if isinstance(item, TimelineStill):
+            self._slider("Trukmė (s)", "display_duration_seconds", 0.5, 30, steps=295, fmt="{:.1f}",
+                         cast=lambda v: round(v, 1))
+        else:
+            self._slider("Greitis (x)", "speed_factor", 0.25, 4.0, steps=75, fmt="{:.2f}",
+                         cast=lambda v: round(v, 2))
+            self._label("Iškarpa iš originalo (s): nuo - iki")
+            row = ctk.CTkFrame(self._body, fg_color="transparent")
+            row.pack(fill="x")
+            self._entry(row, "source_in_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+            ctk.CTkLabel(row, text=" - ").pack(side="left")
+            self._entry(row, "source_out_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+        ctk.CTkLabel(
+            self._body, text="Kraštus galite tempti ir laiko juostoje. Efektai ir perėjimai: kairėje, 🎨 Filtrai.",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
+        ).pack(anchor="w", pady=(theme.SPACE_SM, 0))
         self._action_buttons()
 
     # --- editing -----------------------------------------------------------------------------
