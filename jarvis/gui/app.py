@@ -67,6 +67,7 @@ from jarvis.gui.views.reel_generator.dashboard import ReelGeneratorView
 from jarvis.gui.views.story_generator.dashboard import StoryGeneratorView
 from jarvis.gui.views.video_studio.dashboard import VideoStudioView
 from jarvis.gui.views.video_editor.dashboard import VideoEditorView
+from jarvis.gui.views.carousel_studio.dashboard import CarouselStudioView
 from jarvis.gui.views.simple_panels import (
     AnalyticsView,
     AutomationsView,
@@ -318,6 +319,9 @@ class JarvisApp:
             self.content_area, llm=self.llm, navigate=self._navigate,
         )
         self._views["video_editor"] = VideoEditorView(
+            self.content_area, llm=self.llm, navigate=self._navigate,
+        )
+        self._views["carousel_studio"] = CarouselStudioView(
             self.content_area, llm=self.llm, navigate=self._navigate,
         )
         self._views["automations"] = AutomationsView(self.content_area)
