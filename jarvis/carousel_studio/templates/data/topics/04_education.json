@@ -1,0 +1,401 @@
+{
+ "category": {
+  "key": "education",
+  "label": "Edukacija",
+  "icon": "🎓",
+  "order": 4
+ },
+ "defaults": {
+  "styles": [
+   "modern",
+   "clean",
+   "bold",
+   "minimal",
+   "editorial",
+   "colorful"
+  ],
+  "button": "Išsaugok",
+  "cta_title": "Išsaugok, *pravers*",
+  "cta_body": "Pasidalink su žmogumi, kuriam to reikia"
+ },
+ "topics": [
+  {
+   "key": "edu_5_things",
+   "title": "5 dalykai, kuriuos turi žinoti",
+   "kicker": "Turi žinoti",
+   "cover_title": "*5 dalykai*, kuriuos turi žinoti",
+   "subtitle": "Prieš pradėdamas",
+   "items": [
+    {
+     "title": "Pirmas dalykas",
+     "body": "Trumpas ir aiškus paaiškinimas."
+    },
+    {
+     "title": "Antras dalykas",
+     "body": "Pavyzdys iš gyvenimo."
+    },
+    {
+     "title": "Trečias dalykas",
+     "body": "Dažniausia klaida ir kaip jos išvengti."
+    },
+    {
+     "title": "Ketvirtas dalykas",
+     "body": "Naudingas įrankis ar šaltinis."
+    },
+    {
+     "title": "Penktas dalykas",
+     "body": "Ką padaryti jau šiandien."
+    }
+   ],
+   "layouts": [
+    "big_number",
+    "classic",
+    "card"
+   ],
+   "popularity": 93,
+   "tags": [
+    "5 dalykai",
+    "sąrašas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "edu_3_mistakes",
+   "title": "3 klaidos",
+   "kicker": "Klaidos",
+   "cover_title": "*3 klaidos*, kurias daro beveik visi",
+   "subtitle": "Ir kaip jų išvengti",
+   "items": [
+    {
+     "title": "Klaida nr. 1",
+     "body": "Pradedama be aiškaus tikslo. Pirmiausia apsibrėžkite, ko norite."
+    },
+    {
+     "title": "Klaida nr. 2",
+     "body": "Bandoma viską padaryti iš karto. Rinkitės vieną dalyką."
+    },
+    {
+     "title": "Klaida nr. 3",
+     "body": "Pasiduodama per anksti. Rezultatams reikia laiko."
+    }
+   ],
+   "layouts": [
+    "big_number",
+    "split",
+    "two_panel"
+   ],
+   "labels": [
+    "Klaida",
+    "Sprendimas"
+   ],
+   "popularity": 91,
+   "tags": [
+    "klaidos"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "edu_7_tips",
+   "title": "7 patarimai",
+   "kicker": "7 patarimai",
+   "cover_title": "*7 patarimai*, kurie veikia",
+   "subtitle": "Patikrinta praktikoje",
+   "items": [
+    {
+     "title": "Planuokite",
+     "body": "Vakare susidarykite rytojaus planą."
+    },
+    {
+     "title": "Prioritetai",
+     "body": "Svarbiausia užduotis - pirmoji."
+    },
+    {
+     "title": "Pertraukos",
+     "body": "Kas 50 minučių 10 minučių poilsio."
+    },
+    {
+     "title": "Viena užduotis",
+     "body": "Nedarykite kelių darbų vienu metu."
+    },
+    {
+     "title": "Pasakykite ne",
+     "body": "Saugokite savo laiką."
+    },
+    {
+     "title": "Automatizuokite",
+     "body": "Kartojamus darbus atiduokite įrankiams."
+    },
+    {
+     "title": "Įvertinkite",
+     "body": "Savaitės pabaigoje peržiūrėkite rezultatus."
+    }
+   ],
+   "layouts": [
+    "classic",
+    "card",
+    "big_number"
+   ],
+   "popularity": 89,
+   "tags": [
+    "patarimai",
+    "7"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "edu_step_by_step",
+   "title": "Žingsnis po žingsnio",
+   "kicker": "Gidas",
+   "cover_title": "Kaip tai padaryti *žingsnis po žingsnio*",
+   "subtitle": "Paprastai ir aiškiai",
+   "items": [
+    {
+     "title": "Pasiruoškite",
+     "body": "Surinkite viską, ko reikės."
+    },
+    {
+     "title": "Pradėkite nuo pagrindų",
+     "body": "Pirmiausia - svarbiausia dalis."
+    },
+    {
+     "title": "Patikrinkite",
+     "body": "Ar viskas veikia taip, kaip reikia?"
+    },
+    {
+     "title": "Patobulinkite",
+     "body": "Pridėkite detalių ir savo stilių."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "card",
+    "checklist"
+   ],
+   "popularity": 86,
+   "tags": [
+    "gidas",
+    "instrukcija"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "edu_faq",
+   "title": "DUK",
+   "kicker": "DUK",
+   "cover_title": "Dažniausiai užduodami *klausimai*",
+   "subtitle": "Atsakau trumpai ir aiškiai",
+   "items": [
+    {
+     "title": "Nuo ko pradėti?",
+     "body": "Nuo vieno mažo žingsnio šiandien."
+    },
+    {
+     "title": "Kiek tai kainuoja?",
+     "body": "Pradėti galima ir nemokamai."
+    },
+    {
+     "title": "Kiek laiko užtrunka?",
+     "body": "Pirmus rezultatus pamatysite per 2-4 savaites."
+    },
+    {
+     "title": "Ar tiks man?",
+     "body": "Taip, jei esate pasiruošę mokytis."
+    }
+   ],
+   "layouts": [
+    "qa",
+    "card",
+    "classic"
+   ],
+   "popularity": 80,
+   "tags": [
+    "duk",
+    "klausimai",
+    "faq"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "edu_myth_fact",
+   "title": "Mitas / faktas",
+   "kicker": "Mitas ar faktas?",
+   "cover_title": "*Mitas* ar faktas?",
+   "subtitle": "Patikrinkime kartu",
+   "items": [
+    {
+     "title": "Reikia daug laiko",
+     "body": "Užtenka 15 minučių per dieną."
+    },
+    {
+     "title": "Tai brangu",
+     "body": "Yra daug nemokamų būdų pradėti."
+    },
+    {
+     "title": "Tai tik talentingiems",
+     "body": "Įgūdžių išmokstama praktikuojantis."
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "qa",
+    "split"
+   ],
+   "labels": [
+    "Mitas",
+    "Faktas"
+   ],
+   "popularity": 87,
+   "tags": [
+    "mitas",
+    "faktas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "edu_problem_solution",
+   "title": "Problema / sprendimas",
+   "kicker": "Problema → sprendimas",
+   "cover_title": "Turi šią *problemą*? Štai sprendimas",
+   "subtitle": "Konkretūs žingsniai",
+   "items": [
+    {
+     "title": "Nėra laiko",
+     "body": "Suplanuokite 3 svarbiausius darbus ir pradėkite nuo pirmo."
+    },
+    {
+     "title": "Trūksta motyvacijos",
+     "body": "Susiekite užduotį su savo tikslu."
+    },
+    {
+     "title": "Nežinau, nuo ko pradėti",
+     "body": "Pasirinkite mažiausią įmanomą žingsnį."
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "split",
+    "card"
+   ],
+   "labels": [
+    "Problema",
+    "Sprendimas"
+   ],
+   "tags": [
+    "problema",
+    "sprendimas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "edu_checklist",
+   "title": "Checklist",
+   "kicker": "Checklist",
+   "cover_title": "Tavo *checklist* prieš pradedant",
+   "subtitle": "Pažymėk, ką jau turi",
+   "items": [
+    {
+     "title": "Aiškus tikslas",
+     "body": "Ką tiksliai nori pasiekti?"
+    },
+    {
+     "title": "Laikas kalendoriuje",
+     "body": "Kada tai darysi?"
+    },
+    {
+     "title": "Reikalingi įrankiai",
+     "body": "Ar viską turi?"
+    },
+    {
+     "title": "Pagalba",
+     "body": "Į ką gali kreiptis?"
+    },
+    {
+     "title": "Pirmas žingsnis",
+     "body": "Ką padarysi šiandien?"
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "card",
+    "big_number"
+   ],
+   "popularity": 84,
+   "tags": [
+    "checklist",
+    "sąrašas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "edu_mini_guide",
+   "title": "Mini gidai",
+   "kicker": "Mini gidas",
+   "cover_title": "*Mini gidas*: viskas vienoje vietoje",
+   "subtitle": "Išsaugok ir grįžk",
+   "items": [
+    {
+     "title": "Kas tai?",
+     "body": "Trumpas temos paaiškinimas."
+    },
+    {
+     "title": "Kodėl svarbu?",
+     "body": "Ką tai keičia jūsų kasdienybėje."
+    },
+    {
+     "title": "Kaip pradėti?",
+     "body": "Pirmi 3 žingsniai."
+    },
+    {
+     "title": "Naudingi šaltiniai",
+     "body": "Knygos, programėlės, paskyros."
+    }
+   ],
+   "layouts": [
+    "editorial",
+    "card",
+    "steps"
+   ],
+   "tags": [
+    "gidas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "edu_explainer",
+   "title": "Paaiškinimai",
+   "kicker": "Paaiškinu paprastai",
+   "cover_title": "Paaiškinu *paprastai*",
+   "subtitle": "Be sudėtingų žodžių",
+   "items": [
+    {
+     "title": "Esmė",
+     "body": "Vienu sakiniu - kas tai yra."
+    },
+    {
+     "title": "Pavyzdys",
+     "body": "Kaip tai atrodo realiame gyvenime."
+    },
+    {
+     "title": "Dažna painiava",
+     "body": "Ko nereikia maišyti."
+    },
+    {
+     "title": "Apibendrinimas",
+     "body": "Ką verta prisiminti."
+    }
+   ],
+   "layouts": [
+    "qa",
+    "classic",
+    "centered"
+   ],
+   "tags": [
+    "paaiškinimas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  }
+ ]
+}

@@ -1,0 +1,378 @@
+{
+ "category": {
+  "key": "sales",
+  "label": "Produktų pardavimas",
+  "icon": "🛍",
+  "order": 6
+ },
+ "defaults": {
+  "styles": [
+   "luxury",
+   "bold",
+   "minimal",
+   "colorful",
+   "dark_luxury",
+   "clean"
+  ],
+  "button": "Užsakyk dabar",
+  "cta_title": "Užsakyk *dabar*",
+  "cta_body": "Nuoroda profilyje arba rašyk žinutę"
+ },
+ "topics": [
+  {
+   "key": "sale_product_intro",
+   "title": "Produkto pristatymas",
+   "kicker": "Naujiena",
+   "cover_title": "Pristatome *naujieną*",
+   "subtitle": "Sukurta jums",
+   "items": [
+    {
+     "title": "Kas tai?",
+     "body": "Produktas, kuris išsprendžia jūsų problemą."
+    },
+    {
+     "title": "Kuo ypatingas?",
+     "body": "Kokybiškos medžiagos ir apgalvotas dizainas."
+    },
+    {
+     "title": "Kam skirtas?",
+     "body": "Tiems, kas vertina patogumą."
+    },
+    {
+     "title": "Kaip užsisakyti?",
+     "body": "Spauskite nuorodą profilyje."
+    }
+   ],
+   "layouts": [
+    "product",
+    "photo_cover",
+    "split"
+   ],
+   "popularity": 88,
+   "tags": [
+    "produktas",
+    "pristatymas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "sale_discount",
+   "title": "Akcija",
+   "kicker": "-30%",
+   "cover_title": "*-30%* tik šią savaitę",
+   "subtitle": "Nepraleiskite progos",
+   "items": [
+    {
+     "title": "Kas įeina?",
+     "body": "Visi kolekcijos produktai."
+    },
+    {
+     "title": "Iki kada?",
+     "body": "Iki sekmadienio 23:59."
+    },
+    {
+     "title": "Kaip gauti?",
+     "body": "Kodas PAVASARIS30 krepšelyje."
+    }
+   ],
+   "layouts": [
+    "product",
+    "split",
+    "centered"
+   ],
+   "styles": [
+    "bold",
+    "colorful",
+    "black_white"
+   ],
+   "button": "Pirkti su nuolaida",
+   "popularity": 91,
+   "tags": [
+    "akcija",
+    "nuolaida"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "sale_new_product",
+   "title": "Nauja prekė",
+   "kicker": "Nauja",
+   "cover_title": "Ką tik *atkeliavo*",
+   "subtitle": "Riboto kiekio naujiena",
+   "items": [
+    {
+     "title": "Dizainas",
+     "body": "Švarios linijos, švelnios spalvos."
+    },
+    {
+     "title": "Kokybė",
+     "body": "Patvarios, malonios liesti medžiagos."
+    },
+    {
+     "title": "Kiekis",
+     "body": "Pirmoji partija - tik 50 vnt."
+    }
+   ],
+   "layouts": [
+    "product",
+    "collage",
+    "photo_cover"
+   ],
+   "popularity": 84,
+   "tags": [
+    "nauja prekė",
+    "naujiena"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "sale_limited_offer",
+   "title": "Ribotas pasiūlymas",
+   "kicker": "Tik 48 val.",
+   "cover_title": "*Ribotas* pasiūlymas",
+   "subtitle": "Kai baigsis - nebebus",
+   "items": [
+    {
+     "title": "Pasiūlymas",
+     "body": "Antras produktas už pusę kainos."
+    },
+    {
+     "title": "Laikas",
+     "body": "Galioja tik 48 valandas."
+    },
+    {
+     "title": "Kiekis",
+     "body": "Liko vos keliolika vienetų."
+    }
+   ],
+   "layouts": [
+    "split",
+    "centered",
+    "product"
+   ],
+   "styles": [
+    "black_white",
+    "bold",
+    "dark_luxury"
+   ],
+   "button": "Noriu!",
+   "tags": [
+    "ribotas",
+    "pasiūlymas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "sale_bestseller",
+   "title": "Bestseleris",
+   "kicker": "Bestseleris",
+   "cover_title": "Mūsų *bestseleris*",
+   "subtitle": "Kodėl jį renkasi šimtai klientų",
+   "items": [
+    {
+     "title": "Įvertinimas",
+     "body": "4,9 iš 5 pagal 300+ atsiliepimų."
+    },
+    {
+     "title": "Klientai sako",
+     "body": "„Geriausias pirkinys šiais metais.“"
+    },
+    {
+     "title": "Kodėl veikia",
+     "body": "Paprasta, patikima, patogu."
+    }
+   ],
+   "layouts": [
+    "product",
+    "quote",
+    "big_number"
+   ],
+   "popularity": 86,
+   "tags": [
+    "bestseleris",
+    "populiariausias"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "sale_comparison",
+   "title": "Produkto palyginimas",
+   "kicker": "Palyginimas",
+   "cover_title": "Kuris *tinka jums*?",
+   "subtitle": "Palyginkime",
+   "items": [
+    {
+     "title": "Kaina",
+     "body": "Bazinis variantas pigesnis, premium - ilgaamžiškesnis."
+    },
+    {
+     "title": "Dydis",
+     "body": "Bazinis kompaktiškas, premium talpesnis."
+    },
+    {
+     "title": "Kam tinka",
+     "body": "Bazinis pradedantiesiems, premium - kasdieniam naudojimui."
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "card",
+    "split"
+   ],
+   "labels": [
+    "Bazinis",
+    "Premium"
+   ],
+   "tags": [
+    "palyginimas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "sale_features",
+   "title": "Produkto savybės",
+   "kicker": "Savybės",
+   "cover_title": "*4 savybės*, kurias pamilsite",
+   "subtitle": "Detaliai",
+   "items": [
+    {
+     "title": "Lengvas",
+     "body": "Sveria vos 300 g."
+    },
+    {
+     "title": "Atsparus vandeniui",
+     "body": "Nebijo lietaus."
+    },
+    {
+     "title": "Ilgaamžis",
+     "body": "2 metų garantija."
+    },
+    {
+     "title": "Tvarus",
+     "body": "Pagamintas iš perdirbtų medžiagų."
+    }
+   ],
+   "layouts": [
+    "product",
+    "big_number",
+    "checklist"
+   ],
+   "tags": [
+    "savybės"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "sale_why_choose",
+   "title": "Kodėl verta rinktis",
+   "kicker": "Kodėl mes?",
+   "cover_title": "Kodėl verta rinktis *mus*",
+   "subtitle": "Ne tik produktas",
+   "items": [
+    {
+     "title": "Kokybė",
+     "body": "Tikriname kiekvieną prekę."
+    },
+    {
+     "title": "Greitas pristatymas",
+     "body": "Per 1-2 darbo dienas."
+    },
+    {
+     "title": "Grąžinimas",
+     "body": "30 dienų be klausimų."
+    },
+    {
+     "title": "Žmogiškas aptarnavimas",
+     "body": "Atsakome per valandą."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "card",
+    "split"
+   ],
+   "popularity": 80,
+   "tags": [
+    "kodėl mes",
+    "privalumai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "sale_gift_idea",
+   "title": "Dovanos idėja",
+   "kicker": "Dovanai",
+   "cover_title": "*Dovanos idėja*, kuri tikrai patiks",
+   "subtitle": "Kai nežinote, ką dovanoti",
+   "items": [
+    {
+     "title": "Jai",
+     "body": "Jaukus rinkinys savaitgaliui."
+    },
+    {
+     "title": "Jam",
+     "body": "Praktiškas ir stilingas aksesuaras."
+    },
+    {
+     "title": "Draugei",
+     "body": "Mažas malonumas kasdienai."
+    },
+    {
+     "title": "Supakuosime",
+     "body": "Dovanų pakuotė nemokamai."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "product",
+    "card"
+   ],
+   "styles": [
+    "luxury",
+    "feminine",
+    "pastel"
+   ],
+   "button": "Išsirinkti dovaną",
+   "tags": [
+    "dovana",
+    "dovanos"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "sale_bundle",
+   "title": "Rinkinio pristatymas",
+   "kicker": "Rinkinys",
+   "cover_title": "Pristatome *rinkinį*",
+   "subtitle": "Viskas, ko reikia, vienoje dėžutėje",
+   "items": [
+    {
+     "title": "Kas viduje?",
+     "body": "3 populiariausi produktai."
+    },
+    {
+     "title": "Sutaupote",
+     "body": "Rinkinys 25% pigesnis nei atskirai."
+    },
+    {
+     "title": "Puiki dovana",
+     "body": "Graži pakuotė jau įskaičiuota."
+    }
+   ],
+   "layouts": [
+    "product",
+    "collage",
+    "big_number"
+   ],
+   "tags": [
+    "rinkinys"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  }
+ ]
+}

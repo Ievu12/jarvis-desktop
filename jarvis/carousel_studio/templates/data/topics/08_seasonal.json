@@ -1,0 +1,460 @@
+{
+ "category": {
+  "key": "seasonal",
+  "label": "Sezoniniai",
+  "icon": "🌸",
+  "order": 8
+ },
+ "defaults": {
+  "styles": [
+   "pastel",
+   "colorful",
+   "luxury",
+   "organic",
+   "soft",
+   "dark_luxury"
+  ],
+  "button": "Išsaugok",
+  "cta_title": "Gražios *šventės*!",
+  "cta_body": "Pasidalink su tais, kuriuos myli"
+ },
+ "topics": [
+  {
+   "key": "season_spring",
+   "title": "Pavasaris",
+   "kicker": "Pavasaris",
+   "cover_title": "*Pavasario* idėjos",
+   "subtitle": "Atsinaujinimo metas",
+   "items": [
+    {
+     "title": "Iškylos",
+     "body": "Pirmieji pikinikai saulėje."
+    },
+    {
+     "title": "Gėlės",
+     "body": "Tulpės ant stalo."
+    },
+    {
+     "title": "Tvarka",
+     "body": "Pavasarinis spintos tvarkymas."
+    },
+    {
+     "title": "Nauji įpročiai",
+     "body": "Puikus laikas pradėti."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "card",
+    "photo_cover"
+   ],
+   "styles": [
+    "pastel",
+    "organic",
+    "soft"
+   ],
+   "tags": [
+    "pavasaris"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "season_summer",
+   "title": "Vasara",
+   "kicker": "Vasara",
+   "cover_title": "*Vasaros* bucket list",
+   "subtitle": "Ką būtinai padaryti",
+   "items": [
+    {
+     "title": "Saulėlydis prie jūros",
+     "body": "Su ledais rankoje."
+    },
+    {
+     "title": "Kelionė",
+     "body": "Bent vienas naujas miestas."
+    },
+    {
+     "title": "Vakarai lauke",
+     "body": "Kinas po atviru dangumi."
+    },
+    {
+     "title": "Uogos",
+     "body": "Braškės tiesiai iš lauko."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "collage",
+    "big_number"
+   ],
+   "styles": [
+    "colorful",
+    "bold",
+    "pastel"
+   ],
+   "popularity": 80,
+   "tags": [
+    "vasara"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "season_autumn",
+   "title": "Ruduo",
+   "kicker": "Ruduo",
+   "cover_title": "Jaukus *ruduo*",
+   "subtitle": "Idėjos šiltiems vakarams",
+   "items": [
+    {
+     "title": "Arbata ir knyga",
+     "body": "Geriausias derinys."
+    },
+    {
+     "title": "Pasivaikščiojimai",
+     "body": "Spalvoti lapai parke."
+    },
+    {
+     "title": "Kepiniai",
+     "body": "Moliūgų pyragas."
+    },
+    {
+     "title": "Pledas",
+     "body": "Ir mėgstamas filmas."
+    }
+   ],
+   "layouts": [
+    "photo_cover",
+    "collage",
+    "card"
+   ],
+   "styles": [
+    "beige",
+    "vintage",
+    "organic"
+   ],
+   "tags": [
+    "ruduo"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "season_winter",
+   "title": "Žiema",
+   "kicker": "Žiema",
+   "cover_title": "*Žiemos* jaukumas",
+   "subtitle": "Šilti dalykai šaltomis dienomis",
+   "items": [
+    {
+     "title": "Karštas šokoladas",
+     "body": "Su cinamonu."
+    },
+    {
+     "title": "Žvakės",
+     "body": "Šilta šviesa namuose."
+    },
+    {
+     "title": "Žiemos pasivaikščiojimas",
+     "body": "Sniego girgždesys."
+    },
+    {
+     "title": "Ramybė",
+     "body": "Laikas sustoti."
+    }
+   ],
+   "layouts": [
+    "centered",
+    "photo_cover",
+    "card"
+   ],
+   "styles": [
+    "dark_luxury",
+    "elegant",
+    "minimal"
+   ],
+   "tags": [
+    "žiema"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "season_christmas",
+   "title": "Kalėdos",
+   "kicker": "Kalėdos",
+   "cover_title": "*Kalėdų* idėjos",
+   "subtitle": "Šventinis laukimas",
+   "items": [
+    {
+     "title": "Dovanos",
+     "body": "Mažos, bet asmeniškos."
+    },
+    {
+     "title": "Dekoracijos",
+     "body": "Natūralios šakelės ir žiburėliai."
+    },
+    {
+     "title": "Tradicijos",
+     "body": "Imbieriniai sausainiai su šeima."
+    },
+    {
+     "title": "Laikas kartu",
+     "body": "Svarbiausia dovana."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "centered",
+    "card"
+   ],
+   "styles": [
+    "dark_luxury",
+    "luxury",
+    "vintage"
+   ],
+   "popularity": 82,
+   "tags": [
+    "kalėdos",
+    "šventės"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "season_new_year",
+   "title": "Naujieji metai",
+   "kicker": "Naujieji metai",
+   "cover_title": "*Nauji metai*, nauji tikslai",
+   "subtitle": "Pasitikime kartu",
+   "items": [
+    {
+     "title": "Apžvelk metus",
+     "body": "Kas buvo geriausia?"
+    },
+    {
+     "title": "Paleisk",
+     "body": "Kas nebetarnauja?"
+    },
+    {
+     "title": "Užsibrėžk",
+     "body": "3 tikslai naujiems metams."
+    },
+    {
+     "title": "Švęsk",
+     "body": "Tu daug pasiekei."
+    }
+   ],
+   "layouts": [
+    "big_number",
+    "centered",
+    "checklist"
+   ],
+   "styles": [
+    "dark_luxury",
+    "black_white",
+    "luxury"
+   ],
+   "popularity": 84,
+   "tags": [
+    "nauji metai",
+    "tikslai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "season_valentines",
+   "title": "Valentino diena",
+   "kicker": "Valentino diena",
+   "cover_title": "*Meilės* idėjos Valentino dienai",
+   "subtitle": "Mažos akimirkos, didelė meilė",
+   "items": [
+    {
+     "title": "Laiškas",
+     "body": "Ranka parašyti žodžiai."
+    },
+    {
+     "title": "Vakarienė namuose",
+     "body": "Gaminkite kartu."
+    },
+    {
+     "title": "Prisiminimai",
+     "body": "Bendrų nuotraukų albumas."
+    },
+    {
+     "title": "Meilė sau",
+     "body": "Valentinas ir sau."
+    }
+   ],
+   "layouts": [
+    "card",
+    "collage",
+    "centered"
+   ],
+   "styles": [
+    "feminine",
+    "soft",
+    "luxury"
+   ],
+   "tags": [
+    "valentino",
+    "meilė"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "season_womens_day",
+   "title": "Moters diena",
+   "kicker": "Kovo 8-oji",
+   "cover_title": "Su *Moters diena*!",
+   "subtitle": "Moterims, kurios įkvepia",
+   "items": [
+    {
+     "title": "Stiprybė",
+     "body": "Ji kasdien daro daugiau, nei matyti."
+    },
+    {
+     "title": "Rūpestis",
+     "body": "Ji rūpinasi visais aplinkui."
+    },
+    {
+     "title": "Drąsa",
+     "body": "Ji nebijo svajoti."
+    }
+   ],
+   "layouts": [
+    "quote",
+    "centered",
+    "card"
+   ],
+   "styles": [
+    "feminine",
+    "elegant",
+    "pastel"
+   ],
+   "tags": [
+    "moters diena",
+    "kovo 8"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "season_easter",
+   "title": "Velykos",
+   "kicker": "Velykos",
+   "cover_title": "*Velykų* idėjos",
+   "subtitle": "Pavasario šventė",
+   "items": [
+    {
+     "title": "Margučiai",
+     "body": "Natūralūs dažai iš svogūnų lukštų."
+    },
+    {
+     "title": "Stalas",
+     "body": "Šviežios gėlės ir pastelinės spalvos."
+    },
+    {
+     "title": "Žaidimai",
+     "body": "Margučių ridenimas su šeima."
+    },
+    {
+     "title": "Pusryčiai",
+     "body": "Šventiniai ir ilgi."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "card",
+    "steps"
+   ],
+   "styles": [
+    "pastel",
+    "organic",
+    "soft"
+   ],
+   "tags": [
+    "velykos"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "season_black_friday",
+   "title": "Black Friday",
+   "kicker": "Black Friday",
+   "cover_title": "*Black Friday* jau čia",
+   "subtitle": "Didžiausios metų nuolaidos",
+   "items": [
+    {
+     "title": "Nuolaidos",
+     "body": "Iki -50% visoms prekėms."
+    },
+    {
+     "title": "Laikas",
+     "body": "Tik 3 dienas."
+    },
+    {
+     "title": "Dovana",
+     "body": "Kiekvienam užsakymui - staigmena."
+    }
+   ],
+   "layouts": [
+    "split",
+    "product",
+    "centered"
+   ],
+   "styles": [
+    "black_white",
+    "bold",
+    "dark_luxury"
+   ],
+   "button": "Pirkti dabar",
+   "cta_title": "Nepraleisk *progos*",
+   "cta_body": "Nuoroda profilyje",
+   "popularity": 88,
+   "tags": [
+    "black friday",
+    "akcija"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "season_birthday",
+   "title": "Gimtadienis",
+   "kicker": "Gimtadienis",
+   "cover_title": "*Su gimtadieniu*!",
+   "subtitle": "Švenčiame kartu",
+   "items": [
+    {
+     "title": "Ačiū jums",
+     "body": "Už kiekvieną palaikymo žodį."
+    },
+    {
+     "title": "Metų akimirkos",
+     "body": "Tai, kuo didžiuojuosi."
+    },
+    {
+     "title": "Dovana jums",
+     "body": "Specialus pasiūlymas tik šiandien."
+    }
+   ],
+   "layouts": [
+    "centered",
+    "collage",
+    "card"
+   ],
+   "styles": [
+    "colorful",
+    "pastel",
+    "luxury"
+   ],
+   "tags": [
+    "gimtadienis",
+    "šventė"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  }
+ ]
+}

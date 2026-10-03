@@ -1,0 +1,275 @@
+{
+ "category": {
+  "key": "inspiration",
+  "label": "Įkvėpimas / Motyvacija",
+  "icon": "✨",
+  "order": 10
+ },
+ "defaults": {
+  "styles": [
+   "elegant",
+   "minimal",
+   "dark_luxury",
+   "soft",
+   "editorial",
+   "wellness",
+   "black_white"
+  ],
+  "button": "Išsaugok",
+  "cta_title": "Tu *gali*",
+  "cta_body": "Išsaugok kaip priminimą sau"
+ },
+ "topics": [
+  {
+   "key": "insp_quotes",
+   "title": "Citatos",
+   "kicker": "Citatos",
+   "cover_title": "*Citatos*, kurios įkvepia",
+   "subtitle": "Kai reikia priminimo",
+   "items": [
+    {
+     "title": "„Kelionė prasideda nuo pirmo žingsnio.“",
+     "body": "Lao Tzu"
+    },
+    {
+     "title": "„Daryk, ką gali, su tuo, ką turi, ten, kur esi.“",
+     "body": "Theodore Roosevelt"
+    },
+    {
+     "title": "„Sėkmė - tai suma mažų pastangų, kartojamų kasdien.“",
+     "body": "Robert Collier"
+    }
+   ],
+   "layouts": [
+    "quote",
+    "centered",
+    "editorial"
+   ],
+   "popularity": 90,
+   "tags": [
+    "citatos"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "insp_motivation",
+   "title": "Motyvacija",
+   "kicker": "Motyvacija",
+   "cover_title": "Kai *nesinori* nieko",
+   "subtitle": "Perskaityk tai",
+   "items": [
+    {
+     "title": "Tu jau toli nuėjai",
+     "body": "Prisimink, nuo ko pradėjai."
+    },
+    {
+     "title": "Mažas žingsnis irgi žingsnis",
+     "body": "Šiandien užtenka 1%."
+    },
+    {
+     "title": "Poilsis nėra pasidavimas",
+     "body": "Pailsėk ir tęsk."
+    }
+   ],
+   "layouts": [
+    "quote",
+    "split",
+    "centered"
+   ],
+   "popularity": 86,
+   "tags": [
+    "motyvacija"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "insp_mindset",
+   "title": "Mindset",
+   "kicker": "Mindset",
+   "cover_title": "Pakeisk *mąstymą*",
+   "subtitle": "Mažas pokytis, didelis skirtumas",
+   "items": [
+    {
+     "title": "„Negaliu“",
+     "body": "„Dar negaliu.“"
+    },
+    {
+     "title": "„Tai per sunku“",
+     "body": "„Tai užtruks.“"
+    },
+    {
+     "title": "„Suklydau“",
+     "body": "„Išmokau.“"
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "editorial",
+    "quote"
+   ],
+   "labels": [
+    "Vietoj",
+    "Sakyk"
+   ],
+   "popularity": 84,
+   "tags": [
+    "mindset",
+    "mąstymas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "insp_self_acceptance",
+   "title": "Savęs priėmimas",
+   "kicker": "Savęs priėmimas",
+   "cover_title": "Tu esi *pakankama*",
+   "subtitle": "Priminimas sau",
+   "items": [
+    {
+     "title": "Tavo kūnas",
+     "body": "Jis kasdien tave neša."
+    },
+    {
+     "title": "Tavo klaidos",
+     "body": "Jos tave moko."
+    },
+    {
+     "title": "Tavo tempas",
+     "body": "Jis teisingas tau."
+    }
+   ],
+   "layouts": [
+    "centered",
+    "quote",
+    "card"
+   ],
+   "styles": [
+    "soft",
+    "nude",
+    "wellness"
+   ],
+   "tags": [
+    "savęs priėmimas",
+    "meilė sau"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "insp_goals",
+   "title": "Tikslai",
+   "kicker": "Tikslai",
+   "cover_title": "Kaip *pasiekti* tikslus",
+   "subtitle": "Ne svajonė, o planas",
+   "items": [
+    {
+     "title": "Užrašyk",
+     "body": "Tikslas be plano - tik noras."
+    },
+    {
+     "title": "Suskaidyk",
+     "body": "Maži, aiškūs žingsniai."
+    },
+    {
+     "title": "Matuok",
+     "body": "Sek progresą kas savaitę."
+    },
+    {
+     "title": "Švęsk",
+     "body": "Kiekviena pergalė svarbi."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "big_number",
+    "checklist"
+   ],
+   "tags": [
+    "tikslai"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "insp_productivity",
+   "title": "Produktyvumas",
+   "kicker": "Produktyvumas",
+   "cover_title": "*Produktyvumas* be streso",
+   "subtitle": "Daryk mažiau, bet geriau",
+   "items": [
+    {
+     "title": "3 svarbiausi darbai",
+     "body": "Ne 20 užduočių sąrašas."
+    },
+    {
+     "title": "Laiko blokai",
+     "body": "Viena užduotis - vienas laikas."
+    },
+    {
+     "title": "Pertraukos",
+     "body": "Smegenims reikia poilsio."
+    },
+    {
+     "title": "Vakaro planas",
+     "body": "Rytas prasideda vakare."
+    }
+   ],
+   "layouts": [
+    "classic",
+    "card",
+    "steps"
+   ],
+   "styles": [
+    "modern",
+    "minimal",
+    "clean"
+   ],
+   "popularity": 85,
+   "tags": [
+    "produktyvumas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "insp_positivity",
+   "title": "Pozityvumas",
+   "kicker": "Pozityvumas",
+   "cover_title": "Mažos *džiaugsmo* akimirkos",
+   "subtitle": "Pastebėk jas šiandien",
+   "items": [
+    {
+     "title": "Rytinė kava",
+     "body": "Pirmas gurkšnis."
+    },
+    {
+     "title": "Saulė",
+     "body": "Šiluma ant veido."
+    },
+    {
+     "title": "Juokas",
+     "body": "Su artimu žmogumi."
+    },
+    {
+     "title": "Ramybė",
+     "body": "Tyla vakare."
+    }
+   ],
+   "layouts": [
+    "centered",
+    "collage",
+    "card"
+   ],
+   "styles": [
+    "pastel",
+    "colorful",
+    "soft"
+   ],
+   "tags": [
+    "pozityvumas",
+    "džiaugsmas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  }
+ ]
+}

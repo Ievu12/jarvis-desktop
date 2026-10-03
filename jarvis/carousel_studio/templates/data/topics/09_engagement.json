@@ -1,0 +1,334 @@
+{
+ "category": {
+  "key": "engagement",
+  "label": "Social media / Engagement",
+  "icon": "💬",
+  "order": 9
+ },
+ "defaults": {
+  "styles": [
+   "colorful",
+   "pastel",
+   "bold",
+   "modern",
+   "k_beauty",
+   "clean"
+  ],
+  "button": "Atsakyk komentaruose",
+  "cta_title": "Tavo *eilė*!",
+  "cta_body": "Parašyk atsakymą komentaruose"
+ },
+ "topics": [
+  {
+   "key": "eng_question",
+   "title": "Klausimas auditorijai",
+   "kicker": "Klausimas",
+   "cover_title": "Noriu *paklausti* tavęs",
+   "subtitle": "Atsakyk komentaruose",
+   "items": [
+    {
+     "title": "Mano atsakymas",
+     "body": "Mėgstu ramius rytus su kava."
+    },
+    {
+     "title": "O tavo?",
+     "body": "Koks tavo mėgstamiausias dienos metas?"
+    }
+   ],
+   "layouts": [
+    "qa",
+    "centered",
+    "split"
+   ],
+   "popularity": 82,
+   "tags": [
+    "klausimas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "eng_poll",
+   "title": "Apklausa",
+   "kicker": "Apklausa",
+   "cover_title": "Kurį *pasirinktum*?",
+   "subtitle": "Balsuok komentaruose",
+   "items": [
+    {
+     "title": "Kava",
+     "body": "Su pienu ir be cukraus."
+    },
+    {
+     "title": "Arbata",
+     "body": "Žalioji su citrina."
+    },
+    {
+     "title": "Kakava",
+     "body": "Su zefyrais."
+    },
+    {
+     "title": "Vanduo",
+     "body": "Su mėtomis ir agurku."
+    }
+   ],
+   "layouts": [
+    "poll",
+    "card",
+    "big_number"
+   ],
+   "cta_title": "Parašyk *raidę*",
+   "cta_body": "A, B, C ar D - kurį renkiesi?",
+   "popularity": 85,
+   "tags": [
+    "apklausa",
+    "balsavimas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "eng_a_or_b",
+   "title": "Rinkis A arba B",
+   "kicker": "A ar B?",
+   "cover_title": "Rinkis: *A* ar *B*?",
+   "subtitle": "Tik vienas atsakymas",
+   "items": [
+    {
+     "title": "Kalnai",
+     "body": "Jūra"
+    },
+    {
+     "title": "Rytas",
+     "body": "Vakaras"
+    },
+    {
+     "title": "Knyga",
+     "body": "Filmas"
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "poll",
+    "split"
+   ],
+   "labels": [
+    "A",
+    "B"
+   ],
+   "popularity": 87,
+   "tags": [
+    "a arba b",
+    "pasirinkimas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "eng_did_you_know",
+   "title": "Ar žinojai?",
+   "kicker": "Ar žinojai?",
+   "cover_title": "*Ar žinojai*, kad...",
+   "subtitle": "Įdomūs faktai",
+   "items": [
+    {
+     "title": "Faktas nr. 1",
+     "body": "Medus niekada negenda."
+    },
+    {
+     "title": "Faktas nr. 2",
+     "body": "Aštuonkojai turi tris širdis."
+    },
+    {
+     "title": "Faktas nr. 3",
+     "body": "Bananai yra uogos, o braškės - ne."
+    }
+   ],
+   "layouts": [
+    "qa",
+    "big_number",
+    "centered"
+   ],
+   "popularity": 84,
+   "tags": [
+    "ar žinojai",
+    "faktai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "eng_comments",
+   "title": "Komentarų skatinimas",
+   "kicker": "Pakalbėkime",
+   "cover_title": "Parašyk *vieną žodį*",
+   "subtitle": "Kuris geriausiai tave apibūdina?",
+   "items": [
+    {
+     "title": "Kūrybinga",
+     "body": "Visada su idėjomis."
+    },
+    {
+     "title": "Rami",
+     "body": "Tyla ir harmonija."
+    },
+    {
+     "title": "Energinga",
+     "body": "Visada judėjime."
+    }
+   ],
+   "layouts": [
+    "poll",
+    "card",
+    "centered"
+   ],
+   "cta_title": "Lauksiu *komentarų*!",
+   "cta_body": "Atsakysiu kiekvienam",
+   "tags": [
+    "komentarai"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "eng_save_share",
+   "title": "Save/share karuselė",
+   "kicker": "Išsaugok",
+   "cover_title": "Išsaugok *šį įrašą*",
+   "subtitle": "Prireiks vėliau",
+   "items": [
+    {
+     "title": "Patarimas nr. 1",
+     "body": "Planuok savaitę sekmadienį."
+    },
+    {
+     "title": "Patarimas nr. 2",
+     "body": "Svarbiausias darbas - pirmas."
+    },
+    {
+     "title": "Patarimas nr. 3",
+     "body": "Telefoną laikyk kitame kambaryje."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "classic",
+    "card"
+   ],
+   "cta_title": "Išsaugok ir *pasidalink*",
+   "cta_body": "Siųsk draugui, kuriam tai pravers",
+   "popularity": 88,
+   "tags": [
+    "save",
+    "share",
+    "išsaugok"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "eng_tag_someone",
+   "title": "Tag someone",
+   "kicker": "Pažymėk draugą",
+   "cover_title": "*Pažymėk* draugą, kuris...",
+   "subtitle": "Visada pavėluoja",
+   "items": [
+    {
+     "title": "...visada vėluoja",
+     "body": "Bet visada su kava."
+    },
+    {
+     "title": "...turi atsakymą į viską",
+     "body": "Gyvas Google."
+    },
+    {
+     "title": "...nuolat siunčia memus",
+     "body": "Ir tai geriausia dienos dalis."
+    }
+   ],
+   "layouts": [
+    "centered",
+    "card",
+    "collage"
+   ],
+   "cta_title": "Pažymėk *dabar*!",
+   "cta_body": "Tegul žino, kad apie juos galvoji",
+   "popularity": 80,
+   "tags": [
+    "tag",
+    "pažymėk"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "eng_quiz",
+   "title": "Quiz",
+   "kicker": "Quiz",
+   "cover_title": "Ar *atspėsi*?",
+   "subtitle": "Mažas testas",
+   "items": [
+    {
+     "title": "Klausimas 1",
+     "body": "Kiek valandų miego reikia suaugusiam? Atsakymas: 7-9."
+    },
+    {
+     "title": "Klausimas 2",
+     "body": "Kiek vandens išgerti per dieną? Atsakymas: apie 2 litrus."
+    },
+    {
+     "title": "Klausimas 3",
+     "body": "Kiek žingsnių rekomenduojama? Atsakymas: apie 8000."
+    }
+   ],
+   "layouts": [
+    "qa",
+    "poll",
+    "card"
+   ],
+   "labels": [
+    "Klausimas",
+    "Atsakymas"
+   ],
+   "tags": [
+    "quiz",
+    "testas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "eng_this_or_that",
+   "title": "This or that",
+   "kicker": "This or that",
+   "cover_title": "*This* or that?",
+   "subtitle": "Rinkis greitai",
+   "items": [
+    {
+     "title": "Saldu",
+     "body": "Sūru"
+    },
+    {
+     "title": "Miestas",
+     "body": "Kaimas"
+    },
+    {
+     "title": "Šuo",
+     "body": "Katė"
+    },
+    {
+     "title": "Vasara",
+     "body": "Žiema"
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "split",
+    "poll"
+   ],
+   "labels": [
+    "This",
+    "That"
+   ],
+   "popularity": 83,
+   "tags": [
+    "this or that",
+    "pasirinkimas"
+   ],
+   "added": "2026-10-03"
+  }
+ ]
+}

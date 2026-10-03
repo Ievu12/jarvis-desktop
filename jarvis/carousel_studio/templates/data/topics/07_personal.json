@@ -1,0 +1,348 @@
+{
+ "category": {
+  "key": "personal",
+  "label": "Asmeninis turinys",
+  "icon": "🙋",
+  "order": 7
+ },
+ "defaults": {
+  "styles": [
+   "editorial",
+   "beige",
+   "soft",
+   "minimal",
+   "vintage",
+   "nude",
+   "elegant"
+  ],
+  "button": "Sek mano istoriją",
+  "cta_title": "Ačiū, kad *perskaitei*",
+  "cta_body": "Parašyk komentaruose savo istoriją"
+ },
+ "topics": [
+  {
+   "key": "me_story",
+   "title": "Mano istorija",
+   "kicker": "Mano istorija",
+   "cover_title": "Kaip *viskas prasidėjo*",
+   "subtitle": "Istorija, kurios dar nepasakojau",
+   "items": [
+    {
+     "title": "Pradžia",
+     "body": "Viskas prasidėjo nuo vieno mažo sprendimo."
+    },
+    {
+     "title": "Sunkumai",
+     "body": "Buvo momentų, kai norėjau viską mesti."
+    },
+    {
+     "title": "Lūžis",
+     "body": "Vienas pokalbis viską pakeitė."
+    },
+    {
+     "title": "Dabar",
+     "body": "Darau tai, ką myliu, kiekvieną dieną."
+    }
+   ],
+   "layouts": [
+    "editorial",
+    "photo_cover",
+    "quote"
+   ],
+   "popularity": 87,
+   "tags": [
+    "istorija"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "me_about",
+   "title": "Apie mane",
+   "kicker": "Susipažinkime",
+   "cover_title": "Labas, aš *čia naujai*?",
+   "subtitle": "Keli faktai apie mane",
+   "items": [
+    {
+     "title": "Kas aš?",
+     "body": "Kūrėja, kuri myli kavą ir tvarką."
+    },
+    {
+     "title": "Ką darau?",
+     "body": "Padedu kurti gražų ir naudingą turinį."
+    },
+    {
+     "title": "Ką mėgstu?",
+     "body": "Kelionės, knygos, rytinė joga."
+    },
+    {
+     "title": "Kodėl verta sekti?",
+     "body": "Čia rasi patarimų ir įkvėpimo."
+    }
+   ],
+   "layouts": [
+    "photo_cover",
+    "collage",
+    "card"
+   ],
+   "popularity": 89,
+   "tags": [
+    "apie mane",
+    "prisistatymas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "me_journey",
+   "title": "Mano kelionė",
+   "kicker": "Mano kelionė",
+   "cover_title": "Mano *kelionė* per pastaruosius metus",
+   "subtitle": "Nuo pirmo žingsnio iki dabar",
+   "items": [
+    {
+     "title": "Sausis",
+     "body": "Pirmas įrašas ir 50 sekėjų."
+    },
+    {
+     "title": "Gegužė",
+     "body": "Pirmas bendradarbiavimas."
+    },
+    {
+     "title": "Rugpjūtis",
+     "body": "Pirmasis produktas."
+    },
+    {
+     "title": "Dabar",
+     "body": "Bendruomenė, kuria didžiuojuosi."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "editorial",
+    "collage"
+   ],
+   "tags": [
+    "kelionė",
+    "progresas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "me_goals",
+   "title": "Mano tikslai",
+   "kicker": "Tikslai",
+   "cover_title": "Mano *tikslai* šiems metams",
+   "subtitle": "Užrašau, kad pasiekčiau",
+   "items": [
+    {
+     "title": "Sveikata",
+     "body": "Judėti kasdien."
+    },
+    {
+     "title": "Darbas",
+     "body": "Išleisti naują produktą."
+    },
+    {
+     "title": "Asmeninis",
+     "body": "Daugiau laiko su artimaisiais."
+    },
+    {
+     "title": "Augimas",
+     "body": "Išmokti naujos kalbos."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "big_number",
+    "card"
+   ],
+   "tags": [
+    "tikslai"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "me_lessons",
+   "title": "Pamokos, kurias išmokau",
+   "kicker": "Pamokos",
+   "cover_title": "*5 pamokos*, kurias išmokau",
+   "subtitle": "Kartais sunkiu būdu",
+   "items": [
+    {
+     "title": "Ne viskas turi būti tobula",
+     "body": "Padaryta geriau nei tobula."
+    },
+    {
+     "title": "Ilsėtis yra produktyvu",
+     "body": "Poilsis - ne prabanga."
+    },
+    {
+     "title": "Ne visi supras",
+     "body": "Ir tai gerai."
+    },
+    {
+     "title": "Mažais žingsniais",
+     "body": "Nuoseklumas nugali talentą."
+    },
+    {
+     "title": "Klausyk savęs",
+     "body": "Intuicija dažnai teisi."
+    }
+   ],
+   "layouts": [
+    "quote",
+    "big_number",
+    "editorial"
+   ],
+   "popularity": 85,
+   "tags": [
+    "pamokos"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "me_behind_scenes",
+   "title": "Užkulisiai",
+   "kicker": "Užkulisiai",
+   "cover_title": "Kas vyksta *užkulisiuose*",
+   "subtitle": "Tai, ko nematote įrašuose",
+   "items": [
+    {
+     "title": "Planavimas",
+     "body": "Kiekvienas įrašas prasideda sąsiuvinyje."
+    },
+    {
+     "title": "Filmavimas",
+     "body": "20 dublių vienai sekundei."
+    },
+    {
+     "title": "Redagavimas",
+     "body": "Dvi valandos vakare."
+    },
+    {
+     "title": "Realybė",
+     "body": "Daug kavos ir šiek tiek chaoso."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "photo_cover",
+    "steps"
+   ],
+   "popularity": 82,
+   "tags": [
+    "užkulisiai",
+    "bts"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "me_opinion",
+   "title": "Asmeninė nuomonė",
+   "kicker": "Mano nuomonė",
+   "cover_title": "Nepopuliari *nuomonė*",
+   "subtitle": "Galite nesutikti",
+   "items": [
+    {
+     "title": "Teiginys",
+     "body": "Nereikia keltis 5 ryto, kad būtum produktyvi."
+    },
+    {
+     "title": "Kodėl taip manau",
+     "body": "Kiekvieno žmogaus ritmas skirtingas."
+    },
+    {
+     "title": "Ką siūlau",
+     "body": "Rask savo geriausią laiką ir jį saugok."
+    }
+   ],
+   "layouts": [
+    "quote",
+    "split",
+    "editorial"
+   ],
+   "tags": [
+    "nuomonė"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "me_qa",
+   "title": "Q&A",
+   "kicker": "Q&A",
+   "cover_title": "Atsakau į *jūsų klausimus*",
+   "subtitle": "Klausėte - atsakau",
+   "items": [
+    {
+     "title": "Kiek tau metų?",
+     "body": "Pakankamai, kad žinočiau, ko noriu."
+    },
+    {
+     "title": "Kaip pradėjai?",
+     "body": "Nuo vieno įrašo ir daug drąsos."
+    },
+    {
+     "title": "Kokia kamera?",
+     "body": "Telefonas ir dienos šviesa."
+    },
+    {
+     "title": "Ką patartum?",
+     "body": "Pradėk dabar, tobulinsi vėliau."
+    }
+   ],
+   "layouts": [
+    "qa",
+    "card",
+    "photo_cover"
+   ],
+   "labels": [
+    "Klausimas",
+    "Atsakymas"
+   ],
+   "popularity": 83,
+   "tags": [
+    "q&a",
+    "klausimai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "me_storytelling",
+   "title": "Storytelling",
+   "kicker": "Storytelling",
+   "cover_title": "Istorija, kuri *pakeitė* mano požiūrį",
+   "subtitle": "Perskaityk iki galo",
+   "items": [
+    {
+     "title": "Tą dieną",
+     "body": "Viskas atrodė kaip paprastas antradienis."
+    },
+    {
+     "title": "Kas nutiko",
+     "body": "Vienas netikėtas skambutis."
+    },
+    {
+     "title": "Ką supratau",
+     "body": "Kartais didžiausi pokyčiai prasideda nuo „ne“."
+    },
+    {
+     "title": "Ką tai reiškia tau",
+     "body": "Neprarask vilties."
+    }
+   ],
+   "layouts": [
+    "editorial",
+    "quote",
+    "centered"
+   ],
+   "popularity": 88,
+   "tags": [
+    "istorija",
+    "storytelling"
+   ],
+   "added": "2026-10-03"
+  }
+ ]
+}

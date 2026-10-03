@@ -1,0 +1,364 @@
+{
+ "category": {
+  "key": "lifestyle",
+  "label": "Lifestyle",
+  "icon": "☕",
+  "order": 2
+ },
+ "defaults": {
+  "styles": [
+   "beige",
+   "minimal",
+   "editorial",
+   "organic",
+   "soft",
+   "clean",
+   "vintage"
+  ],
+  "button": "Sek daugiau",
+  "cta_title": "Patiko? *Sek* daugiau",
+  "cta_body": "Parašyk, kokią dalį nori pamatyti išsamiau"
+ },
+ "topics": [
+  {
+   "key": "life_my_day",
+   "title": "Mano diena",
+   "kicker": "Diena su manimi",
+   "cover_title": "Viena *mano diena*",
+   "subtitle": "Nuo ryto kavos iki vakaro",
+   "items": [
+    {
+     "title": "7:00",
+     "body": "Kava ir 10 minučių tylos."
+    },
+    {
+     "title": "9:00",
+     "body": "Darbas prie mėgstamo stalo."
+    },
+    {
+     "title": "13:00",
+     "body": "Pietūs ir pasivaikščiojimas."
+    },
+    {
+     "title": "18:00",
+     "body": "Sportas arba joga."
+    },
+    {
+     "title": "21:00",
+     "body": "Knyga ir arbata."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "photo_cover",
+    "steps"
+   ],
+   "popularity": 86,
+   "tags": [
+    "diena",
+    "vlog"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "life_morning_routine",
+   "title": "Morning routine",
+   "kicker": "Morning routine",
+   "cover_title": "Mano *rytinė rutina*",
+   "subtitle": "Kaip pradedu dieną ramiai",
+   "items": [
+    {
+     "title": "Be telefono",
+     "body": "Pirmą valandą jo nežiūriu."
+    },
+    {
+     "title": "Vanduo",
+     "body": "Stiklinė šilto vandens su citrina."
+    },
+    {
+     "title": "Judesys",
+     "body": "10 minučių tempimo."
+    },
+    {
+     "title": "Planas",
+     "body": "Užsirašau 3 svarbiausius darbus."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "card",
+    "photo_cover"
+   ],
+   "popularity": 90,
+   "tags": [
+    "rytas",
+    "rutina"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "life_evening_routine",
+   "title": "Evening routine",
+   "kicker": "Evening routine",
+   "cover_title": "Vakaro ritualas *geresniam miegui*",
+   "subtitle": "Ką darau prieš miegą",
+   "items": [
+    {
+     "title": "Šilta vonia",
+     "body": "Atpalaiduoja kūną ir mintis."
+    },
+    {
+     "title": "Skincare",
+     "body": "Ramus odos priežiūros ritualas."
+    },
+    {
+     "title": "Dienoraštis",
+     "body": "3 dalykai, už kuriuos esu dėkinga."
+    },
+    {
+     "title": "Knyga",
+     "body": "Ne ekranas, o popierius."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "centered",
+    "card"
+   ],
+   "styles": [
+    "dark_luxury",
+    "soft",
+    "beige"
+   ],
+   "tags": [
+    "vakaras",
+    "rutina",
+    "miegas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "life_self_care",
+   "title": "Self-care",
+   "kicker": "Self-care",
+   "cover_title": "*Self-care* idėjos savaitgaliui",
+   "subtitle": "Mažos akimirkos sau",
+   "items": [
+    {
+     "title": "Ilgas pasivaikščiojimas",
+     "body": "Be ausinukų, tik mintys."
+    },
+    {
+     "title": "Veido kaukė",
+     "body": "Ir mėgstamas serialas."
+    },
+    {
+     "title": "Skaitmeninis poilsis",
+     "body": "Pusdienis be socialinių tinklų."
+    },
+    {
+     "title": "Gėlės sau",
+     "body": "Nes kodėl gi ne?"
+    }
+   ],
+   "layouts": [
+    "card",
+    "collage",
+    "checklist"
+   ],
+   "styles": [
+    "soft",
+    "wellness",
+    "nude"
+   ],
+   "popularity": 84,
+   "tags": [
+    "self-care",
+    "poilsis"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "life_weekly_ritual",
+   "title": "Savaitės ritualas",
+   "kicker": "Sekmadienio ritualas",
+   "cover_title": "Mano *sekmadienio* ritualas",
+   "subtitle": "Ruošiuosi naujai savaitei",
+   "items": [
+    {
+     "title": "Planavimas",
+     "body": "Kalendorius ir svarbiausi tikslai."
+    },
+    {
+     "title": "Maisto planas",
+     "body": "Apsiperku ir paruošiu pietus."
+    },
+    {
+     "title": "Tvarka",
+     "body": "15 minučių namų tvarkymo."
+    },
+    {
+     "title": "Poilsis",
+     "body": "Vakaras tik sau."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "editorial",
+    "steps"
+   ],
+   "tags": [
+    "savaitė",
+    "ritualas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "life_lifestyle",
+   "title": "Gyvenimo būdas",
+   "kicker": "Gyvenimo būdas",
+   "cover_title": "Įpročiai, kurie *pakeitė* mano gyvenimą",
+   "subtitle": "Maži žingsniai kasdien",
+   "items": [
+    {
+     "title": "Ankstyvas kėlimasis",
+     "body": "Daugiau laiko sau ryte."
+    },
+    {
+     "title": "Judėjimas",
+     "body": "10 000 žingsnių kasdien."
+    },
+    {
+     "title": "Mažiau daiktų",
+     "body": "Mažiau chaoso, daugiau ramybės."
+    },
+    {
+     "title": "Dėkingumas",
+     "body": "Kasdien užrašau, kas buvo gero."
+    }
+   ],
+   "layouts": [
+    "classic",
+    "big_number",
+    "quote"
+   ],
+   "tags": [
+    "įpročiai",
+    "gyvenimas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "life_favorites",
+   "title": "Mėgstamiausi dalykai",
+   "kicker": "Favoritai",
+   "cover_title": "Mano *mėnesio favoritai*",
+   "subtitle": "Ką atradau ir pamilau",
+   "items": [
+    {
+     "title": "Knyga",
+     "body": "„Atomic Habits“ - mažų pokyčių galia."
+    },
+    {
+     "title": "Kavinė",
+     "body": "Jauki vieta su geriausia kava mieste."
+    },
+    {
+     "title": "Serialas",
+     "body": "Lengvas, šiltas, vakarams."
+    },
+    {
+     "title": "Daiktas",
+     "body": "Termo puodelis, kuris išlaiko šilumą."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "product",
+    "big_number"
+   ],
+   "popularity": 78,
+   "tags": [
+    "favoritai",
+    "mėgstamiausi"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "life_bucket_list",
+   "title": "Bucket list",
+   "kicker": "Bucket list",
+   "cover_title": "Mano *bucket list* šiems metams",
+   "subtitle": "Ką būtinai noriu padaryti",
+   "items": [
+    {
+     "title": "Kelionė į Islandiją",
+     "body": "Pamatyti šiaurės pašvaistę."
+    },
+    {
+     "title": "Išmokti plaukti",
+     "body": "Pagaliau užtikrintai."
+    },
+    {
+     "title": "Perskaityti 24 knygas",
+     "body": "Po dvi kas mėnesį."
+    },
+    {
+     "title": "Bėgti pusmaratonį",
+     "body": "21 km - mano didysis tikslas."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "collage",
+    "big_number"
+   ],
+   "tags": [
+    "bucket list",
+    "tikslai",
+    "svajonės"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "life_weekly_recap",
+   "title": "Savaitės recap",
+   "kicker": "Savaitės recap",
+   "cover_title": "Mano *savaitė* trumpai",
+   "subtitle": "Akimirkos, kurios liks",
+   "items": [
+    {
+     "title": "Pirmadienis",
+     "body": "Naujas projektas ir daug idėjų."
+    },
+    {
+     "title": "Trečiadienis",
+     "body": "Susitikimas su draugėmis."
+    },
+    {
+     "title": "Penktadienis",
+     "body": "Pirmas bandymas keramikoje."
+    },
+    {
+     "title": "Sekmadienis",
+     "body": "Poilsis gamtoje."
+    }
+   ],
+   "layouts": [
+    "collage",
+    "editorial",
+    "photo_cover"
+   ],
+   "popularity": 75,
+   "tags": [
+    "recap",
+    "savaitė"
+   ],
+   "added": "2026-10-03"
+  }
+ ]
+}
