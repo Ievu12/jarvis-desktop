@@ -17,6 +17,7 @@ from typing import Callable
 
 from jarvis.video_editor.audio_mixing import MusicTrack
 from jarvis.video_editor.captions import CaptionLine, CaptionStyle
+from jarvis.video_editor.reels import ReelsLayers
 from jarvis.video_editor.stickers import StickerInstance
 from jarvis.video_editor.text_overlay import TextOverlay
 from jarvis.video_editor.timeline import Timeline
@@ -35,6 +36,8 @@ class EditorState:
     caption_style: CaptionStyle | None = None
     caption_lines: tuple[CaptionLine, ...] | None = None
     music_track: MusicTrack | None = None
+    reels: ReelsLayers | None = None
+    """Instagram Reels mode layers (animated subtitles, ...); None outside Reels mode."""
 
 
 @dataclass

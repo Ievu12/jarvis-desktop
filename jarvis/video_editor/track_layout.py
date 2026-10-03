@@ -15,23 +15,31 @@ from dataclasses import dataclass
 
 from jarvis.video_editor.editor_state import EditorState
 from jarvis.video_editor.effects import LOOK_LABELS, EffectSpec
+from jarvis.video_editor import reels as reels_module
 from jarvis.video_editor.media_import import MediaItem
 from jarvis.video_editor.playback import assembled_duration, timeline_segments
 from jarvis.video_editor.timeline import MAX_CLIP_VOLUME, TimelineClip, TimelineItem, TimelineStill, TransitionSpec
 
-TRACKS: tuple[str, ...] = ("video", "effects", "sound", "audio", "captions", "text", "stickers")
+TRACKS: tuple[str, ...] = (
+    "video", "effects", "sound", "audio", "captions", "reels_captions", "reels_cards", "reels_inserts", "text", "stickers",
+)
 TRACK_LABELS: dict[str, str] = {
     "video": "🎬 Vaizdas",
     "effects": "🎨 Efektai",
     "sound": "🔊 Klipų garsas",
     "audio": "🎵 Muzika",
     "captions": "💬 Subtitrai",
+    "reels_captions": "🅡 Reels subtitrai",
+    "reels_cards": "🏷 Kortelės",
+    "reels_inserts": "🖼 Intarpai",
     "text": "🔤 Tekstas",
     "stickers": "✨ Lipdukai, GIF",
 }
 MIN_DURATION_SECONDS = 0.1
 
 _OVERLAY_FIELDS = {"text": "text_overlays", "stickers": "stickers", "captions": "caption_lines"}
+_REELS_FIELDS = {"reels_cards": "cards", "reels_inserts": "inserts"}
+"""Tracks whose items live in EditorState.reels."""
 
 
 @dataclass(frozen=True)
@@ -134,6 +142,21 @@ def build_track_bars(state: EditorState, media_items: dict[str, MediaItem]) -> d
             can_move=False, can_trim_start=False, can_trim_end=False,
         ))
 
+    for n, (phrase, text) in enumerate(_reels_phrases(state)):
+        words = state.reels.captions.words
+        bars["reels_captions"].append(TrackBar(
+            "reels_captions", n, phrase.start_seconds, words[phrase.last].end_seconds, text,
+        ))
+
+    if state.reels is not None:
+        for n, card in enumerate(state.reels.cards):
+            bars["reels_cards"].append(TrackBar("reels_cards", n, card.start_seconds, card.end_seconds, card.text))
+        for n, insert in enumerate(state.reels.inserts):
+            icon = "🎞" if insert.kind == "video" else "🖼"
+            bars["reels_inserts"].append(TrackBar(
+                "reels_inserts", n, insert.start_seconds, insert.end_seconds, f"{icon} {insert.name}",
+            ))
+
     for n, overlay in enumerate(state.text_overlays):
         bars["text"].append(TrackBar("text", n, overlay.start_seconds, overlay.end_seconds, overlay.text))
     for n, sticker in enumerate(state.stickers):
@@ -162,14 +185,44 @@ def drop_index(state: EditorState, media_items: dict[str, MediaItem], t: float, 
     return target
 
 
+# --- Reels subtitles: one bar per on-screen phrase -------------------------------------------------
+
+
+def _reels_phrases(state: EditorState) -> list[tuple[reels_module.Phrase, str]]:
+    captions = state.reels.captions if state.reels is not None else None
+    if captions is None or not captions.words:
+        return []
+    return [
+        (phrase, " ".join(w.text for w in captions.words[phrase.first:phrase.last + 1]))
+        for phrase in reels_module.build_phrases(captions.words, captions.style)
+    ]
+
+
+def _with_reels_words(state: EditorState, words: tuple) -> EditorState:
+    captions = dataclasses.replace(state.reels.captions, words=words)
+    return dataclasses.replace(state, reels=dataclasses.replace(state.reels, captions=captions))
+
+
+def _reels_edit(state: EditorState, index: int, edit) -> EditorState:
+    phrases = _reels_phrases(state)
+    if not 0 <= index < len(phrases):
+        return state
+    return _with_reels_words(state, edit(state.reels.captions.words, phrases[index][0]))
+
+
 # --- editing overlays (text, stickers, caption lines) --------------------------------------------
 
 
 def _overlays(state: EditorState, track: str) -> tuple:
+    if track in _REELS_FIELDS:
+        return tuple(getattr(state.reels, _REELS_FIELDS[track])) if state.reels is not None else ()
     return tuple(getattr(state, _OVERLAY_FIELDS[track]) or ())
 
 
 def _with_overlays(state: EditorState, track: str, items: tuple) -> EditorState:
+    if track in _REELS_FIELDS:
+        layers = state.reels or reels_module.ReelsLayers()
+        return dataclasses.replace(state, reels=dataclasses.replace(layers, **{_REELS_FIELDS[track]: items}))
     return dataclasses.replace(state, **{_OVERLAY_FIELDS[track]: items})
 
 
@@ -178,6 +231,10 @@ def _replace_at(items: tuple, index: int, new) -> tuple:
 
 
 def move_overlay(state: EditorState, track: str, index: int, new_start: float, *, total: float) -> EditorState:
+    if track == "reels_captions":
+        return _reels_edit(state, index, lambda words, phrase: reels_module.shift_phrase(
+            words, phrase, max(0.0, new_start) - words[phrase.first].start_seconds,
+        ))
     items = _overlays(state, track)
     item = items[index]
     length = item.end_seconds - item.start_seconds
@@ -190,6 +247,13 @@ def trim_overlay(
     state: EditorState, track: str, index: int, *, start: float | None = None, end: float | None = None,
     total: float,
 ) -> EditorState:
+    if track == "reels_captions":
+        def retime(words, phrase):
+            old_start, old_end = words[phrase.first].start_seconds, words[phrase.last].end_seconds
+            new_start = old_start if start is None else max(0.0, min(start, old_end - MIN_DURATION_SECONDS))
+            new_end = old_end if end is None else max(end, new_start + MIN_DURATION_SECONDS)
+            return reels_module.retime_phrase(words, phrase, new_start, new_end)
+        return _reels_edit(state, index, retime)
     items = _overlays(state, track)
     item = items[index]
     new_start, new_end = item.start_seconds, item.end_seconds
@@ -399,6 +463,8 @@ def delete_element(state: EditorState, track: str, index: int) -> EditorState:
         return dataclasses.replace(state, music_track=None)
     if track == "sound":  # a clip's own sound can't be removed, only muted
         return set_clip_sound(state, index, volume=0.0)
+    if track == "reels_captions":
+        return _reels_edit(state, index, lambda words, phrase: words[:phrase.first] + words[phrase.last + 1:])
     items = _overlays(state, track)
     remaining = items[:index] + items[index + 1:]
     if track == "captions":
@@ -416,7 +482,7 @@ def duplicate_element(
         copy = dataclasses.replace(items[index], clip_id=new_clip_id, transition_out=TransitionSpec())
         items.insert(index + 1, copy)
         return _with_items(state, items), index + 1
-    if track not in _OVERLAY_FIELDS or (track == "captions" and not state.caption_lines):
+    if (track not in _OVERLAY_FIELDS and track not in _REELS_FIELDS) or (track == "captions" and not state.caption_lines):
         return None
     items = _overlays(state, track)
     item = items[index]
