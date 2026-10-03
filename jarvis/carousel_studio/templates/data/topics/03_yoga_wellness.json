@@ -1,0 +1,401 @@
+{
+ "category": {
+  "key": "yoga",
+  "label": "Joga / Wellness",
+  "icon": "🧘",
+  "order": 3
+ },
+ "defaults": {
+  "styles": [
+   "wellness",
+   "organic",
+   "soft",
+   "beige",
+   "clean",
+   "pastel"
+  ],
+  "button": "Išsaugok praktikai",
+  "cta_title": "Išsaugok ir *praktikuok*",
+  "cta_body": "Pažymėk draugę, su kuria norėtum pasportuoti kartu"
+ },
+ "topics": [
+  {
+   "key": "yoga_poses",
+   "title": "Jogos pozos",
+   "kicker": "Jogos pozos",
+   "cover_title": "*5 pozos* pradedantiesiems",
+   "subtitle": "Paprasta ir saugu",
+   "items": [
+    {
+     "title": "Kalno poza",
+     "body": "Stovėkite tiesiai, pečiai atpalaiduoti."
+    },
+    {
+     "title": "Šuo žemyn",
+     "body": "Ištempia nugarą ir kojų užpakalinę pusę."
+    },
+    {
+     "title": "Kariūnas II",
+     "body": "Stiprina kojas ir atveria klubus."
+    },
+    {
+     "title": "Medžio poza",
+     "body": "Lavina pusiausvyrą."
+    },
+    {
+     "title": "Vaiko poza",
+     "body": "Poilsis ir atsipalaidavimas."
+    }
+   ],
+   "layouts": [
+    "photo_cover",
+    "big_number",
+    "collage"
+   ],
+   "popularity": 88,
+   "tags": [
+    "pozos",
+    "asanos"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "yoga_routine",
+   "title": "Jogos rutina",
+   "kicker": "Jogos rutina",
+   "cover_title": "Mano *jogos rutina* kas savaitę",
+   "subtitle": "Balansas tarp jėgos ir ramybės",
+   "items": [
+    {
+     "title": "Pirmadienis",
+     "body": "Vinyasa - 30 min."
+    },
+    {
+     "title": "Trečiadienis",
+     "body": "Jėgos joga - 40 min."
+    },
+    {
+     "title": "Penktadienis",
+     "body": "Yin joga - 30 min."
+    },
+    {
+     "title": "Sekmadienis",
+     "body": "Meditacija - 15 min."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "card",
+    "editorial"
+   ],
+   "tags": [
+    "rutina",
+    "savaitė"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "yoga_5min",
+   "title": "5 minučių rutina",
+   "kicker": "5 minutės",
+   "cover_title": "*5 minučių* joga, kai neturite laiko",
+   "subtitle": "Kiekvienai dienai",
+   "items": [
+    {
+     "title": "1 minutė",
+     "body": "Gilus kvėpavimas sėdint."
+    },
+    {
+     "title": "2 minutė",
+     "body": "Katė ir karvė."
+    },
+    {
+     "title": "3 minutė",
+     "body": "Šuo žemyn."
+    },
+    {
+     "title": "4 minutė",
+     "body": "Pasilenkimas į priekį."
+    },
+    {
+     "title": "5 minutė",
+     "body": "Vaiko poza ir poilsis."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "big_number",
+    "checklist"
+   ],
+   "popularity": 87,
+   "tags": [
+    "greita",
+    "5 minutės"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "yoga_morning",
+   "title": "Rytinė joga",
+   "kicker": "Rytinė joga",
+   "cover_title": "Rytinė joga *energijai*",
+   "subtitle": "Pabuskite švelniai",
+   "items": [
+    {
+     "title": "Pasirąžymas lovoje",
+     "body": "Ištempkite visą kūną."
+    },
+    {
+     "title": "Saulės pasveikinimas",
+     "body": "3 ratai lėtu tempu."
+    },
+    {
+     "title": "Sukimai",
+     "body": "Atgaivina nugarą."
+    },
+    {
+     "title": "Ketinimas dienai",
+     "body": "Vienas žodis, kuris lydės visą dieną."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "photo_cover",
+    "centered"
+   ],
+   "tags": [
+    "rytas",
+    "energija"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "yoga_evening",
+   "title": "Vakarinė joga",
+   "kicker": "Vakarinė joga",
+   "cover_title": "Vakarinė joga *ramiam miegui*",
+   "subtitle": "Atsipalaiduokite po dienos",
+   "items": [
+    {
+     "title": "Kojos ant sienos",
+     "body": "Atpalaiduoja kojas ir nervų sistemą."
+    },
+    {
+     "title": "Drugelis",
+     "body": "Švelniai atveria klubus."
+    },
+    {
+     "title": "Sukimas gulint",
+     "body": "Paleidžia nugaros įtampą."
+    },
+    {
+     "title": "Savasana",
+     "body": "5 minutės visiškos ramybės."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "centered",
+    "card"
+   ],
+   "styles": [
+    "dark_luxury",
+    "wellness",
+    "soft"
+   ],
+   "tags": [
+    "vakaras",
+    "miegas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "yoga_breathing",
+   "title": "Kvėpavimo pratimai",
+   "kicker": "Kvėpavimas",
+   "cover_title": "Kvėpavimo pratimai *nuo streso*",
+   "subtitle": "Užtenka 2 minučių",
+   "items": [
+    {
+     "title": "4-7-8",
+     "body": "Įkvėpkite 4 s, sulaikykite 7 s, iškvėpkite 8 s."
+    },
+    {
+     "title": "Dėžutės kvėpavimas",
+     "body": "Po 4 sekundes: įkvėpis, pauzė, iškvėpis, pauzė."
+    },
+    {
+     "title": "Pilvo kvėpavimas",
+     "body": "Ranka ant pilvo, kvėpuokite giliai."
+    },
+    {
+     "title": "Šnervių kaitaliojimas",
+     "body": "Subalansuoja ir nuramina."
+    }
+   ],
+   "layouts": [
+    "card",
+    "steps",
+    "centered"
+   ],
+   "popularity": 82,
+   "tags": [
+    "kvėpavimas",
+    "stresas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "yoga_meditation",
+   "title": "Meditacija",
+   "kicker": "Meditacija",
+   "cover_title": "Kaip pradėti *medituoti*",
+   "subtitle": "Paprastas gidas pradedantiesiems",
+   "items": [
+    {
+     "title": "Pradėkite nuo 3 minučių",
+     "body": "Trumpai, bet kasdien."
+    },
+    {
+     "title": "Raskite vietą",
+     "body": "Rami, jauki ir ta pati kiekvieną kartą."
+    },
+    {
+     "title": "Stebėkite kvėpavimą",
+     "body": "Mintys ateis - tai normalu."
+    },
+    {
+     "title": "Būkite švelni sau",
+     "body": "Nėra „blogos“ meditacijos."
+    }
+   ],
+   "layouts": [
+    "centered",
+    "quote",
+    "steps"
+   ],
+   "tags": [
+    "meditacija",
+    "ramybė"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "yoga_wellness_tips",
+   "title": "Wellness patarimai",
+   "kicker": "Wellness",
+   "cover_title": "*Wellness* patarimai kasdienai",
+   "subtitle": "Rūpinkitės savimi visapusiškai",
+   "items": [
+    {
+     "title": "Vanduo",
+     "body": "2 litrai per dieną."
+    },
+    {
+     "title": "Judėjimas",
+     "body": "Bent 30 minučių kasdien."
+    },
+    {
+     "title": "Miegas",
+     "body": "Tas pats laikas kiekvieną vakarą."
+    },
+    {
+     "title": "Saulė",
+     "body": "10 minučių dienos šviesos ryte."
+    },
+    {
+     "title": "Ryšys",
+     "body": "Laikas su artimais žmonėmis."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "big_number",
+    "classic"
+   ],
+   "tags": [
+    "wellness",
+    "sveikata"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "yoga_self_growth",
+   "title": "Saviugda",
+   "kicker": "Saviugda",
+   "cover_title": "Saviugda: *nuo ko pradėti*",
+   "subtitle": "Mažais žingsniais",
+   "items": [
+    {
+     "title": "Pažinkite save",
+     "body": "Ko iš tikrųjų norite?"
+    },
+    {
+     "title": "Skaitykite",
+     "body": "10 puslapių per dieną."
+    },
+    {
+     "title": "Rašykite",
+     "body": "Dienoraštis padeda suprasti mintis."
+    },
+    {
+     "title": "Mokykitės",
+     "body": "Viena nauja įgūdžių sritis per metus."
+    }
+   ],
+   "layouts": [
+    "editorial",
+    "steps",
+    "quote"
+   ],
+   "styles": [
+    "beige",
+    "editorial",
+    "organic"
+   ],
+   "tags": [
+    "saviugda",
+    "augimas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "yoga_motivation",
+   "title": "Motyvacija",
+   "kicker": "Motyvacija",
+   "cover_title": "Praktika, ne *tobulumas*",
+   "subtitle": "Priminimas sau",
+   "items": [
+    {
+     "title": "Kiekviena diena kitokia",
+     "body": "Ir tai yra gerai."
+    },
+    {
+     "title": "Klausykite kūno",
+     "body": "Jis žino geriausiai."
+    },
+    {
+     "title": "Mažas žingsnis",
+     "body": "Geriau 5 minutės nei nieko."
+    }
+   ],
+   "layouts": [
+    "quote",
+    "centered",
+    "split"
+   ],
+   "tags": [
+    "motyvacija",
+    "joga"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  }
+ ]
+}

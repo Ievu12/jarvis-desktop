@@ -1,0 +1,425 @@
+{
+ "category": {
+  "key": "business",
+  "label": "Verslas / Marketingas",
+  "icon": "💼",
+  "order": 5
+ },
+ "defaults": {
+  "styles": [
+   "modern",
+   "dark_luxury",
+   "clean",
+   "bold",
+   "black_white",
+   "editorial"
+  ],
+  "button": "Sek daugiau",
+  "cta_title": "Daugiau patarimų - *sek*",
+  "cta_body": "Išsaugok įrašą ir pritaikyk šią savaitę"
+ },
+ "topics": [
+  {
+   "key": "biz_tips",
+   "title": "Verslo patarimai",
+   "kicker": "Verslui",
+   "cover_title": "*5 verslo patarimai*, kurių norėčiau žinoti anksčiau",
+   "subtitle": "Iš patirties",
+   "items": [
+    {
+     "title": "Pradėk mažai",
+     "body": "Išbandyk idėją prieš investuodamas."
+    },
+    {
+     "title": "Klausyk klientų",
+     "body": "Jie pasakys, ko trūksta."
+    },
+    {
+     "title": "Skaičiuok",
+     "body": "Žinok savo pajamas ir išlaidas."
+    },
+    {
+     "title": "Deleguok",
+     "body": "Neprivalai visko daryti pats."
+    },
+    {
+     "title": "Būk nuoseklus",
+     "body": "Mažas progresas kasdien."
+    }
+   ],
+   "layouts": [
+    "big_number",
+    "split",
+    "editorial"
+   ],
+   "popularity": 85,
+   "tags": [
+    "verslas",
+    "patarimai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "biz_instagram_tips",
+   "title": "Instagram patarimai",
+   "kicker": "Instagram",
+   "cover_title": "Kaip *auginti* Instagram 2026",
+   "subtitle": "Kas veikia dabar",
+   "items": [
+    {
+     "title": "Karuselės",
+     "body": "Jas išsaugo ir dalijasi dažniausiai."
+    },
+    {
+     "title": "Reels",
+     "body": "Pirmos 2 sekundės lemia viską."
+    },
+    {
+     "title": "Nuoseklumas",
+     "body": "Geriau 3 įrašai per savaitę nei 10 per dieną."
+    },
+    {
+     "title": "Bendravimas",
+     "body": "Atsakyk į kiekvieną komentarą."
+    },
+    {
+     "title": "Analizė",
+     "body": "Žiūrėk, kas veikia, ir kartok."
+    }
+   ],
+   "layouts": [
+    "classic",
+    "card",
+    "big_number"
+   ],
+   "popularity": 94,
+   "tags": [
+    "instagram",
+    "socialiniai tinklai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "biz_reels_tips",
+   "title": "Reels patarimai",
+   "kicker": "Reels",
+   "cover_title": "Reels, kurie *sulaiko* žiūrovą",
+   "subtitle": "5 taisyklės",
+   "items": [
+    {
+     "title": "Kabliukas",
+     "body": "Pirmos 2 sekundės - stiprus teiginys."
+    },
+    {
+     "title": "Subtitrai",
+     "body": "85% žiūri be garso."
+    },
+    {
+     "title": "Tempas",
+     "body": "Kirpimai kas 2-3 sekundes."
+    },
+    {
+     "title": "Vertė",
+     "body": "Vienas aiškus patarimas."
+    },
+    {
+     "title": "CTA",
+     "body": "Pasakyk, ką daryti toliau."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "big_number",
+    "split"
+   ],
+   "popularity": 90,
+   "tags": [
+    "reels",
+    "video"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "biz_content_ideas",
+   "title": "Turinio idėjos",
+   "kicker": "Turinio idėjos",
+   "cover_title": "*10 turinio idėjų*, kai nežinai, ką kelti",
+   "subtitle": "Išsaugok ateičiai",
+   "items": [
+    {
+     "title": "Užkulisiai",
+     "body": "Kaip atrodo tavo darbas."
+    },
+    {
+     "title": "DUK",
+     "body": "Atsakyk į klientų klausimus."
+    },
+    {
+     "title": "Prieš / po",
+     "body": "Parodyk rezultatą."
+    },
+    {
+     "title": "Klaidos",
+     "body": "Ko išmokai."
+    },
+    {
+     "title": "Įrankiai",
+     "body": "Ką naudoji kasdien."
+    },
+    {
+     "title": "Atsiliepimai",
+     "body": "Klientų žodžiai."
+    },
+    {
+     "title": "Istorija",
+     "body": "Kaip viskas prasidėjo."
+    },
+    {
+     "title": "Mitai",
+     "body": "Paneik populiarų mitą."
+    },
+    {
+     "title": "Patarimas",
+     "body": "Vienas greitas patarimas."
+    },
+    {
+     "title": "Apklausa",
+     "body": "Paklausk auditorijos."
+    }
+   ],
+   "layouts": [
+    "checklist",
+    "big_number",
+    "card"
+   ],
+   "popularity": 92,
+   "tags": [
+    "idėjos",
+    "turinys"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "biz_sales_tips",
+   "title": "Pardavimo patarimai",
+   "kicker": "Pardavimai",
+   "cover_title": "Kaip parduoti *neįkyriai*",
+   "subtitle": "Pardavimai per vertę",
+   "items": [
+    {
+     "title": "Pažink klientą",
+     "body": "Kokią problemą jis sprendžia?"
+    },
+    {
+     "title": "Kalbėk apie naudą",
+     "body": "Ne apie savybes, o apie rezultatą."
+    },
+    {
+     "title": "Socialinis įrodymas",
+     "body": "Atsiliepimai ir rezultatai."
+    },
+    {
+     "title": "Aiškus kitas žingsnis",
+     "body": "Vienas paprastas veiksmas."
+    }
+   ],
+   "layouts": [
+    "split",
+    "classic",
+    "two_panel"
+   ],
+   "labels": [
+    "Vietoj to",
+    "Daryk taip"
+   ],
+   "tags": [
+    "pardavimai"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "biz_product_marketing",
+   "title": "Produkto marketingas",
+   "kicker": "Marketingas",
+   "cover_title": "Kaip *pristatyti* produktą rinkai",
+   "subtitle": "Paleidimo planas",
+   "items": [
+    {
+     "title": "Prieš paleidimą",
+     "body": "Kurk laukimą: užkulisiai ir užuominos."
+    },
+    {
+     "title": "Paleidimo diena",
+     "body": "Aiškus pasiūlymas ir ribotas laikas."
+    },
+    {
+     "title": "Po paleidimo",
+     "body": "Atsiliepimai ir rezultatai."
+    },
+    {
+     "title": "Nuolat",
+     "body": "Primink apie produktą per istorijas."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "product",
+    "editorial"
+   ],
+   "tags": [
+    "marketingas",
+    "paleidimas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "biz_cta_templates",
+   "title": "CTA šablonai",
+   "kicker": "CTA",
+   "cover_title": "*CTA*, kurie skatina veikti",
+   "subtitle": "Nukopijuok ir naudok",
+   "items": [
+    {
+     "title": "Išsaugojimui",
+     "body": "„Išsaugok, kad nepamirštum“"
+    },
+    {
+     "title": "Komentarams",
+     "body": "„Parašyk TAIP, jei sutinki“"
+    },
+    {
+     "title": "Dalijimuisi",
+     "body": "„Pasidalink su draugu, kuriam to reikia“"
+    },
+    {
+     "title": "Pardavimui",
+     "body": "„Rašyk žinutę žodžiu INFO“"
+    }
+   ],
+   "layouts": [
+    "card",
+    "quote",
+    "classic"
+   ],
+   "popularity": 83,
+   "tags": [
+    "cta",
+    "kvietimas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "biz_get_clients",
+   "title": "Klientų pritraukimas",
+   "kicker": "Klientai",
+   "cover_title": "Kaip *pritraukti* pirmuosius klientus",
+   "subtitle": "Be didelio biudžeto",
+   "items": [
+    {
+     "title": "Aiškus pasiūlymas",
+     "body": "Kam padedi ir kaip?"
+    },
+    {
+     "title": "Draugų ratas",
+     "body": "Papasakok, ką darai."
+    },
+    {
+     "title": "Vertingas turinys",
+     "body": "Mokyk, ne pardavinėk."
+    },
+    {
+     "title": "Bendradarbiavimai",
+     "body": "Partnerystės su panašia auditorija."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "split",
+    "big_number"
+   ],
+   "tags": [
+    "klientai"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "biz_ecommerce",
+   "title": "El. prekyba",
+   "kicker": "El. prekyba",
+   "cover_title": "El. parduotuvės *klaidos*, kurios kainuoja",
+   "subtitle": "Patikrink savo",
+   "items": [
+    {
+     "title": "Prastos nuotraukos",
+     "body": "Investuok į šviesą ir foną."
+    },
+    {
+     "title": "Ilgas apmokėjimas",
+     "body": "Kuo mažiau žingsnių."
+    },
+    {
+     "title": "Nėra atsiliepimų",
+     "body": "Paprašyk jų po pirkimo."
+    },
+    {
+     "title": "Lėta svetainė",
+     "body": "Kiekviena sekundė kainuoja pardavimus."
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "classic",
+    "checklist"
+   ],
+   "labels": [
+    "Klaida",
+    "Sprendimas"
+   ],
+   "tags": [
+    "e-parduotuvė",
+    "el. prekyba"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "biz_personal_brand",
+   "title": "Asmeninis prekės ženklas",
+   "kicker": "Asmeninis brandas",
+   "cover_title": "*Asmeninis prekės ženklas*: nuo ko pradėti",
+   "subtitle": "Tapk atpažįstama",
+   "items": [
+    {
+     "title": "Tavo istorija",
+     "body": "Kodėl darai tai, ką darai?"
+    },
+    {
+     "title": "Vizualinis stilius",
+     "body": "Tos pačios spalvos ir šriftai."
+    },
+    {
+     "title": "Tema",
+     "body": "Būk žinoma dėl vieno dalyko."
+    },
+    {
+     "title": "Veidas",
+     "body": "Rodyk save, ne tik produktą."
+    }
+   ],
+   "layouts": [
+    "editorial",
+    "photo_cover",
+    "quote"
+   ],
+   "popularity": 81,
+   "tags": [
+    "brandas",
+    "prekės ženklas"
+   ],
+   "added": "2026-10-03"
+  }
+ ]
+}

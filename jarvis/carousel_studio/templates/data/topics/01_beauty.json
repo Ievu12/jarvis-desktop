@@ -1,0 +1,484 @@
+{
+ "category": {
+  "key": "beauty",
+  "label": "Grožis",
+  "icon": "💄",
+  "order": 1
+ },
+ "defaults": {
+  "styles": [
+   "soft",
+   "k_beauty",
+   "nude",
+   "beige",
+   "feminine",
+   "luxury",
+   "elegant"
+  ],
+  "button": "Išsaugok",
+  "cta_title": "Išsaugok, kad *nepamirštum*",
+  "cta_body": "Parašyk komentaruose, kurį produktą nori išbandyti pirmiausia"
+ },
+ "topics": [
+  {
+   "key": "beauty_product_intro",
+   "title": "Produkto pristatymas",
+   "kicker": "Naujiena",
+   "cover_title": "Susipažinkite: *jūsų odos* naujas favoritas",
+   "subtitle": "Kas tai, kam tinka ir kaip naudoti",
+   "items": [
+    {
+     "title": "Kas tai?",
+     "body": "Lengvas kremas, kuris drėkina visą dieną ir netepa odos."
+    },
+    {
+     "title": "Kam tinka?",
+     "body": "Normaliai, mišriai ir jautriai odai. Tinka ir po makiažu."
+    },
+    {
+     "title": "Kaip naudoti?",
+     "body": "Ryte ir vakare ant švarios odos, žirnelio dydžio kiekis."
+    },
+    {
+     "title": "Kodėl verta?",
+     "body": "Jau po savaitės oda atrodo *ramesnė ir švytinti*."
+    }
+   ],
+   "layouts": [
+    "product",
+    "photo_cover",
+    "card"
+   ],
+   "popularity": 90,
+   "tags": [
+    "produktas",
+    "kremas",
+    "pristatymas"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "beauty_benefits",
+   "title": "Produkto privalumai",
+   "kicker": "5 privalumai",
+   "cover_title": "Kodėl šis serumas *veikia*",
+   "subtitle": "Trumpai apie tai, ką gausite",
+   "items": [
+    {
+     "title": "Gilus drėkinimas",
+     "body": "Hialurono rūgštis pritraukia drėgmę ir ją išlaiko."
+    },
+    {
+     "title": "Lygesnė tekstūra",
+     "body": "Švelnūs rūgščių kiekiai atnaujina odos paviršių."
+    },
+    {
+     "title": "Mažiau paraudimų",
+     "body": "Raminantys ingredientai mažina dirginimą."
+    },
+    {
+     "title": "Švytėjimas",
+     "body": "Vitaminas C suteikia odai gaivumo."
+    },
+    {
+     "title": "Tinka kasdien",
+     "body": "Nedirgina, todėl galima naudoti ryte ir vakare."
+    }
+   ],
+   "layouts": [
+    "big_number",
+    "checklist",
+    "product"
+   ],
+   "tags": [
+    "privalumai",
+    "serumas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "beauty_skincare_routine",
+   "title": "Skincare rutina",
+   "kicker": "Rytinė rutina",
+   "cover_title": "Mano *4 žingsnių* skincare rutina",
+   "subtitle": "Paprasta, greita ir veikia",
+   "items": [
+    {
+     "title": "Prausiklis",
+     "body": "Švelnus gelinis prausiklis be sulfatų."
+    },
+    {
+     "title": "Tonikas",
+     "body": "Drėkinantis tonikas paruošia odą kitiems žingsniams."
+    },
+    {
+     "title": "Serumas",
+     "body": "Vitaminas C ryte, retinolis vakare."
+    },
+    {
+     "title": "Kremas ir SPF",
+     "body": "Drėkinamasis kremas, o ryte būtinai SPF 50."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "photo_cover",
+    "card"
+   ],
+   "popularity": 95,
+   "tags": [
+    "rutina",
+    "skincare",
+    "oda"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "beauty_ingredients",
+   "title": "Ingredientų paaiškinimas",
+   "kicker": "Ingredientų žodynėlis",
+   "cover_title": "Ką *iš tikrųjų* reiškia šie ingredientai?",
+   "subtitle": "Skaitykite etiketes drąsiai",
+   "items": [
+    {
+     "title": "Niacinamidas",
+     "body": "Mažina poras ir raudonį, stiprina odos barjerą."
+    },
+    {
+     "title": "Hialurono rūgštis",
+     "body": "Pritraukia ir sulaiko drėgmę."
+    },
+    {
+     "title": "Retinolis",
+     "body": "Skatina odos atsinaujinimą, mažina raukšleles."
+    },
+    {
+     "title": "Ceramidai",
+     "body": "Atkuria apsauginį odos sluoksnį."
+    }
+   ],
+   "layouts": [
+    "editorial",
+    "classic",
+    "qa"
+   ],
+   "tags": [
+    "ingredientai",
+    "etiketė"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "beauty_before_after",
+   "title": "Prieš / po",
+   "kicker": "Rezultatas",
+   "cover_title": "*30 dienų* rezultatas",
+   "subtitle": "Tikri pokyčiai, be filtrų",
+   "items": [
+    {
+     "title": "Tekstūra",
+     "body": "Nelygi oda virto lygesne ir švelnesne."
+    },
+    {
+     "title": "Paraudimai",
+     "body": "Raudonis sumažėjo beveik per pusę."
+    },
+    {
+     "title": "Švytėjimas",
+     "body": "Oda atrodo gaivesnė ir pailsėjusi."
+    }
+   ],
+   "layouts": [
+    "two_panel",
+    "photo_cover",
+    "collage"
+   ],
+   "labels": [
+    "Prieš",
+    "Po"
+   ],
+   "popularity": 88,
+   "tags": [
+    "prieš po",
+    "rezultatai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "beauty_top_products",
+   "title": "TOP produktai",
+   "kicker": "TOP 5",
+   "cover_title": "Mano *TOP 5* produktai šį mėnesį",
+   "subtitle": "Kuriuos naudoju kasdien",
+   "items": [
+    {
+     "title": "Drėkinamasis kremas",
+     "body": "Lengvas, greitai susigeria."
+    },
+    {
+     "title": "Vitamino C serumas",
+     "body": "Gaivumui ir švytėjimui."
+    },
+    {
+     "title": "Lūpų balzamas",
+     "body": "Mano rankinės būtinybė."
+    },
+    {
+     "title": "SPF 50",
+     "body": "Nesunkus ir nepalieka balto atspalvio."
+    },
+    {
+     "title": "Akių kremas",
+     "body": "Mažiau patinimų rytais."
+    }
+   ],
+   "layouts": [
+    "big_number",
+    "product",
+    "collage"
+   ],
+   "popularity": 92,
+   "tags": [
+    "top",
+    "favoritai"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "beauty_new_in",
+   "title": "Naujiena",
+   "kicker": "Ką tik atkeliavo",
+   "cover_title": "*Naujiena*, kurios laukėte",
+   "subtitle": "Pirmieji įspūdžiai",
+   "items": [
+    {
+     "title": "Kas naujo?",
+     "body": "Atnaujinta formulė ir dar švelnesnė tekstūra."
+    },
+    {
+     "title": "Kvapas",
+     "body": "Subtilus, beveik nejaučiamas."
+    },
+    {
+     "title": "Pakuotė",
+     "body": "Patogi pompa, užtenka 2 mėnesiams."
+    }
+   ],
+   "layouts": [
+    "product",
+    "split",
+    "centered"
+   ],
+   "tags": [
+    "naujiena",
+    "nauja prekė"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "beauty_review",
+   "title": "Produkto apžvalga",
+   "kicker": "Sąžininga apžvalga",
+   "cover_title": "Ar verta? *Mano apžvalga*",
+   "subtitle": "Pliusai, minusai ir verdiktas",
+   "items": [
+    {
+     "title": "Pirmas įspūdis",
+     "body": "Maloni tekstūra, greitai susigeria."
+    },
+    {
+     "title": "Po 2 savaičių",
+     "body": "Oda drėgnesnė, mažiau sausų vietų."
+    },
+    {
+     "title": "Minusai",
+     "body": "Kaina aukštesnė nei vidutinė."
+    },
+    {
+     "title": "Verdiktas",
+     "body": "*Verta*, jei jūsų oda sausa ar jautri."
+    }
+   ],
+   "layouts": [
+    "quote",
+    "photo_cover",
+    "editorial"
+   ],
+   "tags": [
+    "apžvalga",
+    "review"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "beauty_recommendations",
+   "title": "Rekomendacijos",
+   "kicker": "Rekomenduoju",
+   "cover_title": "Ką rekomenduoju *pagal odos tipą*",
+   "subtitle": "Išsirinkite savo",
+   "items": [
+    {
+     "title": "Sausa oda",
+     "body": "Kremai su ceramidais ir aliejais."
+    },
+    {
+     "title": "Riebi oda",
+     "body": "Lengvi geliai, niacinamidas."
+    },
+    {
+     "title": "Jautri oda",
+     "body": "Bekvapiai produktai su centella."
+    },
+    {
+     "title": "Mišri oda",
+     "body": "Skirtingi produktai skirtingoms zonoms."
+    }
+   ],
+   "layouts": [
+    "card",
+    "split",
+    "checklist"
+   ],
+   "tags": [
+    "rekomendacijos",
+    "odos tipas"
+   ],
+   "added": "2026-10-03",
+   "popularity": 60
+  },
+  {
+   "key": "beauty_skin_tips",
+   "title": "Odos priežiūros patarimai",
+   "kicker": "Patarimai",
+   "cover_title": "*7 patarimai* gražesnei odai",
+   "subtitle": "Paprasti įpročiai, didelis skirtumas",
+   "items": [
+    {
+     "title": "Gerkite vandenį",
+     "body": "Drėgmė prasideda iš vidaus."
+    },
+    {
+     "title": "Kasdien SPF",
+     "body": "Net ir debesuotą dieną."
+    },
+    {
+     "title": "Keiskite pagalvės užvalkalą",
+     "body": "Bent kartą per savaitę."
+    },
+    {
+     "title": "Nelieskite veido",
+     "body": "Mažiau bakterijų ir spuogelių."
+    },
+    {
+     "title": "Miegokite",
+     "body": "7-8 valandos atsispindi veide."
+    },
+    {
+     "title": "Mažiau yra daugiau",
+     "body": "Nenaudokite 10 produktų iš karto."
+    },
+    {
+     "title": "Būkite kantrūs",
+     "body": "Rezultatams reikia 4-6 savaičių."
+    }
+   ],
+   "layouts": [
+    "classic",
+    "big_number",
+    "card"
+   ],
+   "popularity": 85,
+   "tags": [
+    "patarimai",
+    "oda"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "beauty_k_beauty",
+   "title": "K-beauty",
+   "kicker": "K-beauty",
+   "cover_title": "Korėjietiškos *odos priežiūros* paslaptys",
+   "subtitle": "Ko išmokau iš K-beauty",
+   "items": [
+    {
+     "title": "Dvigubas valymas",
+     "body": "Pirma aliejus, tada vandeninis prausiklis."
+    },
+    {
+     "title": "Esencija",
+     "body": "Lengvas žingsnis, kuris paruošia odą."
+    },
+    {
+     "title": "Kaukės",
+     "body": "Lakštinės kaukės 2-3 kartus per savaitę."
+    },
+    {
+     "title": "Apsauga nuo saulės",
+     "body": "Svarbiausias žingsnis kiekvieną rytą."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "card",
+    "centered"
+   ],
+   "styles": [
+    "k_beauty",
+    "pastel",
+    "soft"
+   ],
+   "popularity": 80,
+   "tags": [
+    "k-beauty",
+    "korėja"
+   ],
+   "added": "2026-10-03"
+  },
+  {
+   "key": "beauty_makeup",
+   "title": "Makiažas",
+   "kicker": "Makiažas",
+   "cover_title": "Natūralus makiažas *per 10 minučių*",
+   "subtitle": "Kasdieniam įvaizdžiui",
+   "items": [
+    {
+     "title": "Bazė",
+     "body": "Lengvas tonas ar BB kremas."
+    },
+    {
+     "title": "Skaistalai",
+     "body": "Kreminiai skaistalai ant skruostų obuoliukų."
+    },
+    {
+     "title": "Antakiai",
+     "body": "Sušukuokite ir užfiksuokite geliu."
+    },
+    {
+     "title": "Blakstienos ir lūpos",
+     "body": "Vienas tušo sluoksnis ir atspalvinis balzamas."
+    }
+   ],
+   "layouts": [
+    "steps",
+    "photo_cover",
+    "collage"
+   ],
+   "styles": [
+    "feminine",
+    "nude",
+    "soft"
+   ],
+   "popularity": 83,
+   "tags": [
+    "makiažas",
+    "makeup"
+   ],
+   "added": "2026-10-03"
+  }
+ ]
+}

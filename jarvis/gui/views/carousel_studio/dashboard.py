@@ -1,6 +1,7 @@
 """Top-level view for the sidebar's "Karuselių kūrimas" item: the
 project library (create a new carousel, continue, rename, duplicate,
-delete) and the editor screen, one shown at a time."""
+delete), the template library ("📚 Šablonų biblioteka") and the editor
+screen, one shown at a time."""
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from jarvis.carousel_studio.storage import ProjectSummary, StorageError
 from jarvis.core.llm import LLMClient
 from jarvis.gui import theme
 from jarvis.gui.views.carousel_studio.editor_screen import EditorScreen
+from jarvis.gui.views.carousel_studio.template_library import TemplateLibraryScreen
 from jarvis.gui.widgets import Card, SectionHeader
 
 FORMAT_SHORT = {"portrait": "4:5", "square": "1:1", "story": "9:16"}
@@ -34,9 +36,10 @@ def _when(iso: str) -> str:
 
 
 class LibraryScreen(ctk.CTkFrame):
-    def __init__(self, master, *, on_open: Callable[[str], None]) -> None:
+    def __init__(self, master, *, on_open: Callable[[str], None], on_templates: Callable[[], None] | None = None) -> None:
         super().__init__(master, fg_color="transparent")
         self._on_open = on_open
+        self._on_templates = on_templates
         self._images: list[ctk.CTkImage] = []
 
         ctk.CTkLabel(self, text="🧩  Karuselių kūrimas", font=ctk.CTkFont(family=theme.FONT_FAMILY, size=theme.FONT_SIZE_HERO, weight="bold"), text_color=theme.TEXT_PRIMARY, anchor="w").pack(fill="x", pady=(0, 2))
@@ -55,6 +58,9 @@ class LibraryScreen(ctk.CTkFrame):
         self.count_var = ctk.StringVar(value="5")
         ctk.CTkOptionMenu(row, values=[str(n) for n in range(MIN_SLIDES, MAX_SLIDES + 1)], variable=self.count_var, width=70, height=34).pack(side="left")
         ctk.CTkButton(row, text="Kurti karuselę", height=34, command=self._create).pack(side="left", padx=theme.SPACE_MD)
+        if on_templates is not None:
+            ctk.CTkButton(row, text="📚 Šablonų biblioteka", height=34, fg_color=theme.ACCENT_VIOLET,
+                          command=on_templates).pack(side="left")
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x")
@@ -137,8 +143,9 @@ class CarouselStudioView(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.llm = llm
         self._navigate = navigate
-        self.library = LibraryScreen(self, on_open=self.open_project)
+        self.library = LibraryScreen(self, on_open=self.open_project, on_templates=self.show_templates)
         self.editor = EditorScreen(self, on_back=self.show_library)
+        self.templates: TemplateLibraryScreen | None = None  # built on first open (renders previews)
         self.library.pack(fill="both", expand=True, padx=theme.SPACE_LG, pady=theme.SPACE_LG)
         self.library.refresh()
 
@@ -146,8 +153,17 @@ class CarouselStudioView(ctk.CTkFrame):
         if self.library.winfo_ismapped() or not self.editor.winfo_ismapped():
             self.library.refresh()
 
+    def show_templates(self) -> None:
+        if self.templates is None:
+            self.templates = TemplateLibraryScreen(self, on_use=self.open_project, on_back=self.show_library)
+        self.library.pack_forget()
+        self.editor.pack_forget()
+        self.templates.pack(fill="both", expand=True, padx=theme.SPACE_LG, pady=theme.SPACE_LG)
+
     def show_library(self) -> None:
         self.editor.pack_forget()
+        if self.templates is not None:
+            self.templates.pack_forget()
         self.library.pack(fill="both", expand=True, padx=theme.SPACE_LG, pady=theme.SPACE_LG)
         self.library.refresh()
 
@@ -158,5 +174,7 @@ class CarouselStudioView(ctk.CTkFrame):
             messagebox.showerror("Karuselių kūrimas", str(exc), parent=self.winfo_toplevel())
             return
         self.library.pack_forget()
+        if self.templates is not None:
+            self.templates.pack_forget()
         self.editor.pack(fill="both", expand=True, padx=theme.SPACE_SM, pady=theme.SPACE_SM)
         self.editor.load(project)
