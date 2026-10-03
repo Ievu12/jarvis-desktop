@@ -164,6 +164,9 @@ class TextOverlay:
     background_opacity: float = 0.0
     """0 = no background box behind the text."""
     background_color: str = "black"
+    opacity: float = 1.0
+    """The whole text's opacity (text, outline, shadow and background
+    together), on top of any fade animation: drawtext's own `alpha`."""
     # The style fields above are 1080p pixels like font_size (scaled
     # per export resolution) and map one-to-one onto drawtext's own
     # borderw / shadowx+shadowy / box options.
@@ -205,6 +208,8 @@ class TextOverlay:
             problems.append("Text shadow opacity must be between 0.0 and 1.0.")
         if not (0.0 <= self.background_opacity <= 1.0):
             problems.append("Text background opacity must be between 0.0 and 1.0.")
+        if not (0.0 <= self.opacity <= 1.0):
+            problems.append("Text opacity must be between 0.0 and 1.0.")
         if self.is_rotated and self.animation not in ROTATABLE_TEXT_ANIMATIONS:
             problems.append(
                 f"Rotated text supports only the {' / '.join(ROTATABLE_TEXT_ANIMATIONS)} animations "
@@ -327,9 +332,27 @@ def build_text_overlay_filter(
             clauses.append(_glow_clause(overlay, font_file_arg=font_file_arg))
         else:
             clauses.append(_plain_or_fade_clause(overlay, font_file_arg=font_file_arg))
+        clauses[-1] = _with_opacity(clauses[-1], overlay.opacity)
 
     chain = ",".join(clauses)
     return f"[{video_label}]{chain}[{output_label}]"
+
+
+def _with_opacity(clause: str, opacity: float) -> str:
+    """Every drawtext of one overlay's `clause` with its alpha times
+    `opacity` - the fade animation's own alpha expression is scaled,
+    every other drawtext gets a constant alpha."""
+    if opacity >= 1.0:
+        return clause
+    factor = f"{opacity:.3f}"
+    parts = []
+    for drawtext in clause.split(",drawtext="):
+        if ":alpha='" in drawtext:
+            drawtext = drawtext.replace(":alpha='", f":alpha='{factor}*", 1)
+        else:
+            drawtext = drawtext.replace(":enable='", f":alpha={factor}:enable='", 1)
+        parts.append(drawtext)
+    return ",drawtext=".join(parts)
 
 
 def _scaled(overlay: TextOverlay, scale: float) -> TextOverlay:
@@ -389,6 +412,8 @@ def build_rotated_text_filters(
                 f",fade=t=in:st={start}:d={overlay.fade_seconds}:alpha=1"
                 f",fade=t=out:st={fade_out_start}:d={overlay.fade_seconds}:alpha=1"
             )
+        if overlay.opacity < 1.0:
+            alpha_stage += f",colorchannelmixer=aa={overlay.opacity:.3f}"
         text_label = f"rtext{n}"
         output_label = f"rtextv{n}"
         clause = (

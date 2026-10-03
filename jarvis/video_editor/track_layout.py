@@ -1,5 +1,5 @@
 """The multi-track timeline's model: which bars sit on which track
-(video, effects, audio, captions, text, stickers) and the edits a
+(video, effects, clip sound, music, captions, text, stickers) and the edits a
 person can make by dragging them - move, trim either edge, reorder,
 split, duplicate, delete. Pure functions over EditorState, no GUI, so
 every drag the track timeline supports is unit-testable on its own.
@@ -17,16 +17,17 @@ from jarvis.video_editor.editor_state import EditorState
 from jarvis.video_editor.effects import LOOK_LABELS, EffectSpec
 from jarvis.video_editor.media_import import MediaItem
 from jarvis.video_editor.playback import assembled_duration, timeline_segments
-from jarvis.video_editor.timeline import TimelineItem, TimelineStill, TransitionSpec
+from jarvis.video_editor.timeline import MAX_CLIP_VOLUME, TimelineClip, TimelineItem, TimelineStill, TransitionSpec
 
-TRACKS: tuple[str, ...] = ("video", "effects", "audio", "captions", "text", "stickers")
+TRACKS: tuple[str, ...] = ("video", "effects", "sound", "audio", "captions", "text", "stickers")
 TRACK_LABELS: dict[str, str] = {
     "video": "🎬 Vaizdas",
     "effects": "🎨 Efektai",
-    "audio": "🎵 Garsas",
+    "sound": "🔊 Klipų garsas",
+    "audio": "🎵 Muzika",
     "captions": "💬 Subtitrai",
     "text": "🔤 Tekstas",
-    "stickers": "✨ Lipdukai",
+    "stickers": "✨ Lipdukai, GIF",
 }
 MIN_DURATION_SECONDS = 0.1
 
@@ -66,11 +67,47 @@ def effect_label(effect: EffectSpec) -> str | None:
     return " + ".join(parts) if parts else None
 
 
+def sound_label(clip: TimelineClip) -> str:
+    """The clip-sound lane's text: volume and fades at a glance."""
+    if clip.volume <= 0.0:
+        return "🔇 Nutildyta"
+    label = f"🔊 {round(clip.volume * 100)}%"
+    if clip.audio_fade_in_seconds > 0 or clip.audio_fade_out_seconds > 0:
+        label += " ◢◣"
+    return label
+
+
+def set_clip_sound(
+    state: EditorState, index: int | None, *, volume: float | None = None,
+    fade_in: float | None = None, fade_out: float | None = None,
+) -> EditorState:
+    """Volume/fades of one video clip's own sound, or of every clip's
+    when `index` is None (photos have no sound and are left alone)."""
+    items = list(state.timeline.items)
+    for n, item in enumerate(items):
+        if (index is not None and n != index) or not isinstance(item, TimelineClip):
+            continue
+        changes = {}
+        if volume is not None:
+            changes["volume"] = round(max(0.0, min(MAX_CLIP_VOLUME, volume)), 2)
+        if fade_in is not None:
+            changes["audio_fade_in_seconds"] = round(max(0.0, fade_in), 2)
+        if fade_out is not None:
+            changes["audio_fade_out_seconds"] = round(max(0.0, fade_out), 2)
+        items[n] = dataclasses.replace(item, **changes)
+    return _with_items(state, items)
+
+
 def build_track_bars(state: EditorState, media_items: dict[str, MediaItem]) -> dict[str, list[TrackBar]]:
     bars: dict[str, list[TrackBar]] = {track: [] for track in TRACKS}
     for segment in timeline_segments(state.timeline, media_items):
         name = segment.media.original_filename
         bars["video"].append(TrackBar("video", segment.index, segment.start_seconds, segment.end_seconds, name))
+        if isinstance(segment.item, TimelineClip):
+            bars["sound"].append(TrackBar(
+                "sound", segment.index, segment.start_seconds, segment.end_seconds, sound_label(segment.item),
+                can_move=False, can_trim_start=False, can_trim_end=False,
+            ))
         label = effect_label(segment.item.effect)
         if label is not None:
             bars["effects"].append(TrackBar(
@@ -333,6 +370,20 @@ def transition_markers(
     return markers
 
 
+def reorder_overlay(state: EditorState, track: str, index: int, delta: int) -> tuple[EditorState, int]:
+    """Moves text/sticker `index` `delta` layers up (+, drawn later so
+    on top of the others of its kind) or down (-). Returns the new
+    state and the element's new index."""
+    items = list(_overlays(state, track))
+    if not 0 <= index < len(items):
+        return state, index
+    target = max(0, min(len(items) - 1, index + delta))
+    if target == index:
+        return state, index
+    items.insert(target, items.pop(index))
+    return _with_overlays(state, track, tuple(items)), target
+
+
 # --- delete / duplicate (any track) ----------------------------------------------------------------
 
 
@@ -346,6 +397,8 @@ def delete_element(state: EditorState, track: str, index: int) -> EditorState:
         return _with_items(state, items)
     if track == "audio":
         return dataclasses.replace(state, music_track=None)
+    if track == "sound":  # a clip's own sound can't be removed, only muted
+        return set_clip_sound(state, index, volume=0.0)
     items = _overlays(state, track)
     remaining = items[:index] + items[index + 1:]
     if track == "captions":

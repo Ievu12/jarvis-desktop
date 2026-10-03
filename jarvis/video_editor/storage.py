@@ -200,6 +200,9 @@ def load_project(project_id: str):
                     clip_id=item_data["clip_id"], media_item_id=item_data["media_item_id"],
                     source_in_seconds=item_data["source_in_seconds"], source_out_seconds=item_data["source_out_seconds"],
                     speed_factor=item_data.get("speed_factor", 1.0), transition_out=transition, effect=effect,
+                    volume=item_data.get("volume", 1.0),
+                    audio_fade_in_seconds=item_data.get("audio_fade_in_seconds", 0.0),
+                    audio_fade_out_seconds=item_data.get("audio_fade_out_seconds", 0.0),
                 ))
             else:
                 items.append(TimelineStill(

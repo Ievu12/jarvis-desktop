@@ -68,10 +68,16 @@ def test_search_filters_shapes_by_name(root):
     assert "flower" not in results
 
 
+def test_search_finds_shapes_by_lithuanian_category_name(root):
+    panel = StickersPanel(root, on_stickers_changed=lambda s: None)
+    panel._search_entry.insert(0, "Gėlės")
+    assert panel._current_library_shapes()[:2] == ["flower", "leaf"]
+
+
 def test_favorites_category_shows_only_favorited_shapes(root):
     panel = StickersPanel(root, on_stickers_changed=lambda s: None)
     panel._on_toggle_favorite_clicked("star")
-    panel._category_dropdown.set("⭐ Favorites")
+    panel._category_dropdown.set("⭐ Mėgstami")
     results = panel._current_library_shapes()
     assert results == ["star"]
 

@@ -424,9 +424,11 @@ def render_preview_audio(
             stages.append(clause)
             audio_out = mixed_label
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # The channel count is left as the export makes it: forcing stereo
+    # here turned a mono clip's sound 3 dB quieter than in the export.
     command = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", *input_args,
-        "-filter_complex", ";".join(stages), "-map", f"[{audio_out}]", "-ac", "2", "-ar", "44100", str(output_path),
+        "-filter_complex", ";".join(stages), "-map", f"[{audio_out}]", "-ar", "44100", str(output_path),
     ]
     result = subprocess.run(
         command, cwd=str(cwd), capture_output=True, text=True, timeout=600, check=False,

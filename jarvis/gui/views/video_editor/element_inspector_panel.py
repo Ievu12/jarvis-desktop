@@ -20,11 +20,12 @@ from jarvis.gui import theme
 from jarvis.gui.views.video_editor.common import LabeledDropdown
 from jarvis.gui.widgets import Card
 from jarvis.video_editor.effects import LOOK_CHOICES, LOOK_LABELS
-from jarvis.video_editor.stickers import STICKER_ANIMATION_CHOICES, StickerInstance
+from jarvis.video_editor import animation_catalog as catalog
+from jarvis.video_editor.stickers import StickerInstance
 from jarvis.video_editor.text_render import FONT_CHOICES, FONT_LABELS, font_is_available
 from jarvis.video_editor.text_templates import TEXT_STYLE_PRESETS, apply_text_style
-from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TEXT_ANIMATION_CHOICES, TextOverlay
-from jarvis.video_editor.timeline import TRANSITION_KIND_CHOICES, TimelineClip, TimelineStill, TransitionSpec
+from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TextOverlay
+from jarvis.video_editor.timeline import MAX_CLIP_VOLUME, TRANSITION_KIND_CHOICES, TimelineClip, TimelineStill, TransitionSpec
 from jarvis.video_editor.track_layout import MIN_TRANSITION_SECONDS, TRANSITION_LABELS
 
 _COMMIT_DELAY_MS = 500
@@ -37,9 +38,13 @@ class ElementInspectorPanel(ctk.CTkFrame):
         on_element_edited: Callable[[str, int, object, bool], None],
         on_delete_requested: Callable[[str, int], None],
         on_duplicate_requested: Callable[[str, int], None],
+        on_layer_requested: Callable[[str, int, int], None] | None = None,
         **kwargs,
     ) -> None:
+        """`on_layer_requested(kind, index, delta)` moves a text or
+        sticker one layer up (+1, drawn later, on top) or down (-1)."""
         super().__init__(master, fg_color="transparent", **kwargs)
+        self._on_layer_requested = on_layer_requested
         self._on_element_edited = on_element_edited
         self._on_delete_requested = on_delete_requested
         self._on_duplicate_requested = on_duplicate_requested
@@ -195,13 +200,28 @@ class ElementInspectorPanel(ctk.CTkFrame):
         ctk.CTkLabel(row, text=" - ").pack(side="left")
         self._entry(row, "end_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
 
-    def _animation_dropdown(self, choices: tuple[str, ...]) -> LabeledDropdown:
-        dropdown = LabeledDropdown(self._body, "Animacija:", choices)
-        dropdown.pack(fill="x", pady=(theme.SPACE_SM, 0))
+    def _animation_controls(self, kind: str) -> None:
+        """A category dropdown (entrance, exit, motion, scale, fade,
+        bounce, slide) narrowing the animation dropdown under it."""
+        category_labels = tuple(catalog.CATEGORY_LABELS[c] for c in catalog.ANIMATION_CATEGORIES)
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(theme.SPACE_SM, 0))
+        category = LabeledDropdown(row, "Animacijų grupė:", category_labels)
+        category.pack(fill="x")
+        animation = LabeledDropdown(row, "Animacija:", (catalog.animation_label(kind, "none"),))
+        animation.pack(fill="x", pady=(theme.SPACE_XS, 0))
 
-        def on_pick(value: str) -> None:
+        def fill_animations(category_key: str) -> None:
+            labels = [catalog.animation_label(kind, a) for a in catalog.animations_in(kind, category_key)]
+            animation.dropdown.configure(values=labels)
+
+        def on_category(label: str) -> None:
+            fill_animations(catalog.ANIMATION_CATEGORIES[category_labels.index(label)])
+
+        def on_pick(label: str) -> None:
             if self._refreshing:
                 return
+            value = catalog.animation_from_label(kind, label)
             changes = {"animation": value}
             # Rotation only exports with a plain/fade text animation (see
             # text_overlay.ROTATABLE_TEXT_ANIMATIONS) - picking another
@@ -210,10 +230,66 @@ class ElementInspectorPanel(ctk.CTkFrame):
                 changes["rotation_degrees"] = 0.0
             self._edit(final=True, **changes)
 
-        dropdown.dropdown.configure(command=on_pick)
-        dropdown.set(self._element.animation)
-        self._value_setters.append(lambda element: dropdown.set(element.animation))
-        return dropdown
+        category.dropdown.configure(command=on_category)
+        animation.dropdown.configure(command=on_pick)
+
+        def set_value(element) -> None:
+            current = element.animation
+            shown = catalog.ANIMATION_CATEGORIES[category_labels.index(category.get())]
+            if current not in catalog.animations_in(kind, shown):
+                shown = catalog.category_of(kind, current)
+                category.set(catalog.CATEGORY_LABELS[shown])
+            fill_animations(shown)
+            animation.set(catalog.animation_label(kind, current))
+
+        category.set(catalog.CATEGORY_LABELS[catalog.category_of(kind, self._element.animation)])
+        set_value(self._element)
+        self._value_setters.append(set_value)
+
+    def _text_animation_settings(self) -> None:
+        self._slider("Animacijos greitis (x)", "speed", 0.25, 4.0, steps=75, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        self._slider("Animacijos stiprumas", "intensity", 0.1, 3.0, steps=29, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        self._slider("Išblukimo trukmė (s)", "fade_seconds", 0.1, 3.0, steps=29, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        labels = {"left": "Iš kairės", "right": "Iš dešinės"}
+        direction = LabeledDropdown(self._body, "Slinkimo kryptis:", tuple(labels.values()))
+        direction.pack(fill="x", pady=(theme.SPACE_SM, 0))
+
+        def on_pick(label: str) -> None:
+            if not self._refreshing:
+                self._edit(final=True, direction=next(k for k, v in labels.items() if v == label))
+
+        direction.dropdown.configure(command=on_pick)
+        set_direction = lambda element: direction.set(labels.get(element.direction, labels["left"]))  # noqa: E731
+        set_direction(self._element)
+        self._value_setters.append(set_direction)
+        ctk.CTkLabel(
+            self._body, text="Animacija prasideda ir baigiasi kartu su elementu: keiskite laiką žemiau arba "
+                             "tempdami kraštus laiko juostoje.",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=190, justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
+    def _layer_buttons(self) -> None:
+        if self._on_layer_requested is None:
+            return
+        self._label("Sluoksnis")
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x")
+        style = dict(fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
+                     border_color=theme.BORDER_SUBTLE, height=28)
+        ctk.CTkButton(row, text="⬆ Į priekį", width=100, command=lambda: self._move_layer(+1), **style).pack(
+            side="left", padx=(0, theme.SPACE_XS),
+        )
+        ctk.CTkButton(row, text="⬇ Atgal", width=100, command=lambda: self._move_layer(-1), **style).pack(side="left")
+
+    def _move_layer(self, delta: int) -> None:
+        if self._kind is None:
+            return
+        self._flush_commit()
+        self._on_layer_requested(self._kind, self._index, delta)
 
     def _action_buttons(self) -> None:
         row = ctk.CTkFrame(self._body, fg_color="transparent")
@@ -325,8 +401,11 @@ class ElementInspectorPanel(ctk.CTkFrame):
 
         set_rotation_state(overlay)
         self._value_setters.append(set_rotation_state)
-        self._animation_dropdown(TEXT_ANIMATION_CHOICES)
+        self._slider("Permatomumas", "opacity", 0.0, 1.0, steps=100, fmt="{:.2f}", cast=lambda v: round(v, 2))
+        self._animation_controls("text")
+        self._text_animation_settings()
         self._timing_row()
+        self._layer_buttons()
         self._action_buttons()
 
     def _build_sticker_controls(self, sticker: StickerInstance) -> None:
@@ -338,7 +417,7 @@ class ElementInspectorPanel(ctk.CTkFrame):
         self._slider("Dydis", "size_fraction", 0.02, 1.0, steps=98, fmt="{:.2f}")
         self._slider("Pasukimas (°)", "rotation_degrees", -180, 180, steps=360, fmt="{:.0f}")
         self._slider("Permatomumas", "opacity", 0.0, 1.0, steps=100, fmt="{:.2f}")
-        self._animation_dropdown(STICKER_ANIMATION_CHOICES)
+        self._animation_controls("sticker")
         self._slider("Animacijos greitis (x)", "animation_speed", 0.25, 4.0, steps=75, fmt="{:.2f}",
                      cast=lambda v: round(v, 2))
         self._slider("Animacijos stiprumas", "animation_intensity", 0.0, 3.0, steps=60, fmt="{:.2f}",
@@ -348,6 +427,7 @@ class ElementInspectorPanel(ctk.CTkFrame):
                      cast=lambda v: round(v, 1))
         self._slider("Dingimas (s)", "fade_out_seconds", 0.0, 3.0, steps=30, fmt="{:.1f}",
                      cast=lambda v: round(v, 1))
+        self._layer_buttons()
         self._action_buttons()
 
     def _build_clip_controls(self, item: TimelineClip | TimelineStill, title: str) -> None:
@@ -368,6 +448,7 @@ class ElementInspectorPanel(ctk.CTkFrame):
             self._entry(row, "source_in_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
             ctk.CTkLabel(row, text=" - ").pack(side="left")
             self._entry(row, "source_out_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+            self._clip_sound_controls()
         self._look_controls()
         self._transition_controls()
         ctk.CTkLabel(
@@ -376,6 +457,39 @@ class ElementInspectorPanel(ctk.CTkFrame):
             text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
         ).pack(anchor="w", pady=(theme.SPACE_SM, 0))
         self._action_buttons()
+
+    def _clip_sound_controls(self) -> None:
+        """The clip's own sound: volume, mute and fades."""
+        self._label("🔊 Klipo garsas")
+        mute_button = ctk.CTkButton(
+            self._body, text="", width=140, height=26,
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        )
+        mute_button.pack(anchor="w", pady=(2, 0))
+        self._unmuted_volume = 1.0
+
+        def toggle_mute() -> None:
+            if self._element.volume > 0:
+                self._unmuted_volume = self._element.volume
+                self._edit(final=True, volume=0.0)
+            else:
+                self._edit(final=True, volume=self._unmuted_volume or 1.0)
+            set_mute_text(self._element)
+
+        def set_mute_text(element) -> None:
+            mute_button.configure(text="🔊 Įjungti garsą" if element.volume <= 0 else "🔇 Nutildyti")
+
+        mute_button.configure(command=toggle_mute)
+        set_mute_text(self._element)
+        self._value_setters.append(set_mute_text)
+        self._slider("Garsumas (%)", "volume", 0, MAX_CLIP_VOLUME * 100, steps=40, fmt="{:.0f}",
+                     cast=lambda v: int(round(v)),
+                     get=lambda element: element.volume * 100,
+                     changes=lambda value: {"volume": round(value / 100, 2)})
+        self._slider("Garso atsiradimas (s)", "audio_fade_in_seconds", 0.0, 5.0, steps=50, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        self._slider("Garso išnykimas (s)", "audio_fade_out_seconds", 0.0, 5.0, steps=50, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
 
     def _look_controls(self) -> None:
         labels = tuple(LOOK_LABELS[look] for look in LOOK_CHOICES)

@@ -739,3 +739,61 @@ def _srt_timestamp(seconds: float) -> str:
     minutes, rem = divmod(rem, 60_000)
     secs, ms = divmod(rem, 1000)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+
+_SRT_TIME = r"(\d{1,2}):(\d{2}):(\d{2})(?:[,.](\d{1,3}))?"
+
+
+def parse_srt(text: str) -> list[CaptionLine]:
+    """Reads SubRip subtitles (the person's own .srt, or one written by
+    export_srt()) into CaptionLines, in time order. Tolerant of what
+    hand-made and other programs' SRT files contain: missing index
+    lines, "." instead of "," before the milliseconds, Windows line
+    ends, a BOM, several text lines per cue (joined with a space) and
+    simple <i>/<b>/<font> tags (removed). Cues without text or with an
+    end before their start are skipped, never raised."""
+    import re
+
+    pattern = re.compile(rf"{_SRT_TIME}\s*-->\s*{_SRT_TIME}")
+
+    def seconds(h, m, s, ms) -> float:
+        return int(h) * 3600 + int(m) * 60 + int(s) + (int((ms or "0").ljust(3, "0")) / 1000)
+
+    lines: list[CaptionLine] = []
+    blocks = re.split(r"\n\s*\n", text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n"))
+    for block in blocks:
+        rows = [row.strip() for row in block.strip().split("\n") if row.strip()]
+        for n, row in enumerate(rows):
+            match = pattern.search(row)
+            if match is None:
+                continue
+            start = seconds(*match.groups()[:4])
+            end = seconds(*match.groups()[4:])
+            caption = re.sub(r"<[^>]+>|\{\\[^}]*\}", "", " ".join(rows[n + 1:])).strip()
+            if caption and end > start:
+                lines.append(CaptionLine(text=caption, start_seconds=round(start, 3), end_seconds=round(end, 3)))
+            break
+    return sorted(lines, key=lambda line: line.start_seconds)
+
+
+def import_srt(path: Path) -> list[CaptionLine]:
+    """parse_srt() of a file. UTF-8 first (with or without BOM), then
+    Windows-1257 (Baltic) and Windows-1252, so older Lithuanian SRT files
+    keep their ą č ę ė į š ų ū ž. Raises CaptionError when the file
+    can't be read or holds no subtitles."""
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        raise CaptionError(f"Nepavyko atidaryti failo: {e}") from e
+    for encoding in ("utf-8-sig", "utf-16", "cp1257", "cp1252"):
+        if encoding == "utf-16" and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            continue
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        lines = parse_srt(text)
+        if lines:
+            return lines
+        break
+    raise CaptionError(f"Faile {path.name} nerasta subtitrų (SRT formatas).")

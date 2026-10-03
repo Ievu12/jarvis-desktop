@@ -35,11 +35,11 @@ from jarvis.video_editor.stickers import (
 )
 
 _FILETYPES = (
-    ("Image/GIF files", "*.png *.gif *.webp"),
+    ("Paveikslėliai ir GIF", "*.png *.gif *.webp"),
     ("All files", "*.*"),
 )
 
-_LIBRARY_CATEGORY_LABELS = ("⭐ Favorites", "🔍 Search results") + tuple(
+_LIBRARY_CATEGORY_LABELS = ("⭐ Mėgstami", "🔍 Paieškos rezultatai") + tuple(
     STICKER_CATEGORY_LABELS[c] for c in STICKER_CATEGORY_CHOICES
 )
 _THUMB_SIZE = 56
@@ -73,12 +73,12 @@ class StickersPanel(ctk.CTkFrame):
         inner.pack(fill="x", padx=theme.SPACE_MD, pady=theme.SPACE_MD)
 
         ctk.CTkLabel(
-            inner, text="✨ STICKERS, GIF & EMOJI",
+            inner, text="✨ LIPDUKAI, GIF IR EMOJI",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
             text_color=theme.ACCENT_PRIMARY, anchor="w",
         ).pack(anchor="w", pady=(0, theme.SPACE_SM))
         ctk.CTkLabel(
-            inner, text="Browse the sticker library by category, search by name, or upload your own PNG/GIF.",
+            inner, text="Rinkitės lipdukus pagal kategoriją, ieškokite pagal pavadinimą arba įkelkite savo PNG ar GIF failą.",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
             text_color=theme.TEXT_MUTED, anchor="w", wraplength=600, justify="left",
         ).pack(anchor="w", pady=(0, theme.SPACE_SM))
@@ -86,7 +86,7 @@ class StickersPanel(ctk.CTkFrame):
         # --- library browser (search + categories + favorites) ---------------------------
         browser_row = ctk.CTkFrame(inner, fg_color="transparent")
         browser_row.pack(fill="x", pady=(0, theme.SPACE_SM))
-        self._search_entry = ctk.CTkEntry(browser_row, width=160, placeholder_text="Search stickers...")
+        self._search_entry = ctk.CTkEntry(browser_row, width=160, placeholder_text="Ieškoti...")
         self._search_entry.pack(side="left", padx=(0, theme.SPACE_SM))
         self._search_entry.bind("<KeyRelease>", lambda _e: self._render_library_grid())
 
@@ -112,11 +112,11 @@ class StickersPanel(ctk.CTkFrame):
 
         buttons_row = ctk.CTkFrame(inner, fg_color="transparent")
         buttons_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
-        ctk.CTkButton(buttons_row, text="📁 Upload PNG/GIF", command=self._on_upload_clicked, width=150).pack(
+        ctk.CTkButton(buttons_row, text="📁 Įkelti PNG/GIF", command=self._on_upload_clicked, width=150).pack(
             side="left", padx=(0, theme.SPACE_SM),
         )
         ctk.CTkButton(
-            buttons_row, text="💾 Save Current as Collection", command=self._on_save_collection_clicked, width=200,
+            buttons_row, text="💾 Išsaugoti rinkinį", command=self._on_save_collection_clicked, width=200,
             fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(side="left")
 
@@ -127,13 +127,18 @@ class StickersPanel(ctk.CTkFrame):
     # --- library browser --------------------------------------------------------------------
 
     def _current_library_shapes(self) -> list[str]:
-        query = self._search_entry.get().strip().lower()
+        query = self._search_entry.get().strip().casefold()
         if query:
-            return [s for s in STICKER_SHAPE_CHOICES if query in s.replace("_", " ")]
+            # English shape names, or a Lithuanian category name ("šird", "gėl", "kava")
+            found = [s for s in STICKER_SHAPE_CHOICES if query in s.replace("_", " ")]
+            for category, category_label in STICKER_CATEGORY_LABELS.items():
+                if query in category_label.casefold():
+                    found += [s for s in STICKER_CATEGORY_SHAPES[category] if s not in found]
+            return found
         label = self._category_dropdown.get()
-        if label == "⭐ Favorites":
+        if label == "⭐ Mėgstami":
             return list(self._library_state.favorite_shapes)
-        if label == "🔍 Search results":
+        if label == "🔍 Paieškos rezultatai":
             return []
         for category, category_label in STICKER_CATEGORY_LABELS.items():
             if category_label == label:
@@ -166,7 +171,7 @@ class StickersPanel(ctk.CTkFrame):
             child.destroy()
         shapes = self._current_library_shapes()
         if not shapes:
-            status_label(self._library_grid, "No stickers match - try a different search or category.", kind="muted").pack(anchor="w")
+            status_label(self._library_grid, "Nieko nerasta: pabandykite kitą žodį ar kategoriją.", kind="muted").pack(anchor="w")
             return
 
         row = None
@@ -241,7 +246,7 @@ class StickersPanel(ctk.CTkFrame):
     def _on_save_collection_clicked(self) -> None:
         if not self._stickers:
             return
-        dialog = ctk.CTkInputDialog(text="Name this collection:", title="Save Sticker Collection")
+        dialog = ctk.CTkInputDialog(text="Rinkinio pavadinimas:", title="Išsaugoti lipdukų rinkinį")
         name = dialog.get_input()
         if not name:
             return
@@ -254,7 +259,7 @@ class StickersPanel(ctk.CTkFrame):
             child.destroy()
         if not self._library_state.collections:
             return
-        status_label(self._collections_container, "Saved collections:", kind="muted").pack(anchor="w")
+        status_label(self._collections_container, "Išsaugoti rinkiniai:", kind="muted").pack(anchor="w")
         for collection in self._library_state.collections:
             row = ctk.CTkFrame(self._collections_container, fg_color="transparent")
             row.pack(fill="x", pady=(theme.SPACE_XS, 0))
@@ -319,7 +324,7 @@ class StickersPanel(ctk.CTkFrame):
         self._emit()
 
     def _on_upload_clicked(self) -> None:
-        path = filedialog.askopenfilename(title="Add sticker image", filetypes=_FILETYPES)
+        path = filedialog.askopenfilename(title="Įkelti lipduką ar GIF", filetypes=_FILETYPES)
         if not path:
             return
         self._stickers.append(StickerInstance(start_seconds=0.0, end_seconds=2.0, custom_path=Path(path)))
@@ -354,12 +359,12 @@ class StickersPanel(ctk.CTkFrame):
         row1.pack(fill="x", pady=(0, theme.SPACE_XS))
         start_entry = ctk.CTkEntry(row1, width=55)
         start_entry.insert(0, f"{sticker.start_seconds:g}")
-        ctk.CTkLabel(row1, text="Start (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkLabel(row1, text="Nuo (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         start_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         end_entry = ctk.CTkEntry(row1, width=55)
         end_entry.insert(0, f"{sticker.end_seconds:g}")
-        ctk.CTkLabel(row1, text="End (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkLabel(row1, text="Iki (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         end_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         animation_dropdown = LabeledDropdown(row1, "Animation:", STICKER_ANIMATION_CHOICES)
@@ -380,17 +385,17 @@ class StickersPanel(ctk.CTkFrame):
 
         size_entry = ctk.CTkEntry(row2, width=50)
         size_entry.insert(0, f"{sticker.size_fraction:g}")
-        ctk.CTkLabel(row2, text="Size (0-1):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkLabel(row2, text="Dydis (0-1):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         size_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         rotation_entry = ctk.CTkEntry(row2, width=50)
         rotation_entry.insert(0, f"{sticker.rotation_degrees:g}")
-        ctk.CTkLabel(row2, text="Rotation°:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkLabel(row2, text="Pasukimas°:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         rotation_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         opacity_entry = ctk.CTkEntry(row2, width=50)
         opacity_entry.insert(0, f"{sticker.opacity:g}")
-        ctk.CTkLabel(row2, text="Opacity:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkLabel(row2, text="Permatomumas:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         opacity_entry.pack(side="left")
 
         error_label = status_label(inner, "", kind="error")
@@ -426,11 +431,11 @@ class StickersPanel(ctk.CTkFrame):
             shape_dropdown.dropdown.configure(command=lambda _v: on_change())
 
         ctk.CTkButton(
-            inner, text="📋 Duplicate", width=100, height=24, command=lambda i=index: self._duplicate(i),
+            inner, text="📋 Kopijuoti", width=100, height=24, command=lambda i=index: self._duplicate(i),
             fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(side="left", pady=(theme.SPACE_XS, 0))
         ctk.CTkButton(
-            inner, text="🗑 Remove", width=90, height=24, command=lambda i=index: self._remove(i),
+            inner, text="🗑 Pašalinti", width=90, height=24, command=lambda i=index: self._remove(i),
             fg_color=theme.BG_CARD, hover_color=theme.DANGER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(side="left", padx=(theme.SPACE_XS, 0), pady=(theme.SPACE_XS, 0))
 

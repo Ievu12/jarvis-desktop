@@ -26,15 +26,16 @@ from jarvis.video_editor.media_import import MediaItem
 TrackRef = tuple[str, int]
 
 RULER_HEIGHT = 22
-LANE_HEIGHT = 26
-LANE_GAP = 3
-LABEL_WIDTH = 104
+LANE_HEIGHT = 24
+LANE_GAP = 2
+LABEL_WIDTH = 122
 EDGE_GRAB_PX = 7
 SNAP_PX = 8
 MIN_PX_PER_SECOND, MAX_PX_PER_SECOND = 4.0, 400.0
 _TRACK_COLORS = {
     "video": theme.ACCENT_PRIMARY,
     "effects": "#c27c0e",
+    "sound": "#1f7a8c",
     "audio": "#2d8a5f",
     "captions": "#b38600",
     "text": "#8a4fb3",
@@ -251,7 +252,7 @@ class TrackTimelinePanel(ctk.CTkFrame):
             return
         new_state = tl.delete_element(self._state, track, index)
         self._set_selected(None, notify=True)
-        self._on_state_edited(new_state, True, "Ištrinta", None)
+        self._on_state_edited(new_state, True, "Nutildyta" if track == "sound" else "Ištrinta", None)
 
     # --- drawing -------------------------------------------------------------------------------
 
@@ -381,7 +382,7 @@ class TrackTimelinePanel(ctk.CTkFrame):
         state = "normal" if self._selected is not None else "disabled"
         self._delete_button.configure(state=state)
         self._duplicate_button.configure(
-            state="normal" if editable_selection and self._selected[0] != "audio" else "disabled",
+            state="normal" if editable_selection and self._selected[0] not in ("audio", "sound") else "disabled",
         )
         self._split_button.configure(state="normal" if self._state.timeline.items else "disabled")
 

@@ -265,8 +265,16 @@ def _assert_matches(exact, preview, base, *, max_mean_difference=6.0):
                 outline_width=4, background_opacity=0.7, background_color="#C9A7FF"),
     TextOverlay(text="Kitas šriftas ąčę", start_seconds=0.5, end_seconds=3, font_size=80, font="georgia",
                 outline_width=3),
+    TextOverlay(text="Pusiau permatomas", start_seconds=0.5, end_seconds=3, font_size=80, opacity=0.5,
+                outline_width=4, background_opacity=0.6, background_color="#FFD700"),
+    TextOverlay(text="Permatomas išnyksta", start_seconds=0.5, end_seconds=3, font_size=80, animation="fade",
+                fade_seconds=0.4, opacity=0.6, shadow_offset=5),
+    TextOverlay(text="Permatomas pasuktas", start_seconds=0.5, end_seconds=3, font_size=70, rotation_degrees=15,
+                opacity=0.5, outline_width=3),
+    TextOverlay(text="Glitch", start_seconds=0.5, end_seconds=3, font_size=90, animation="glitch", opacity=0.7),
 ], ids=["plain-lithuanian", "bounce", "pop_up", "typewriter", "rotated", "outline", "shadow", "box",
-        "all-styles-fading", "glow-box", "rotated-styled", "other-font"])
+        "all-styles-fading", "glow-box", "rotated-styled", "other-font", "opacity-styled", "opacity-fading",
+        "opacity-rotated", "opacity-glitch"])
 def test_text_preview_matches_export(parity_env, parity_font, overlay):
     t = 0.83 if overlay.animation == "typewriter" else 0.6 if overlay.animation == "pop_up" else 1.0
     exact, preview, base = _export_vs_preview(parity_env, t=t, texts=[overlay])

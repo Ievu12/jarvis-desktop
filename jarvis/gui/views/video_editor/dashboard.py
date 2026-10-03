@@ -105,7 +105,7 @@ _PREVIEW_AUDIO_DELAY_MS = 600
 _PREVIEW_CANVAS_TIER = "1080p"
 _LIBRARY_WIDTH = 440
 _INSPECTOR_WIDTH = 290
-_TRACKS_HEIGHT = 250
+_TRACKS_HEIGHT = 280
 # Overlay sizes are 1080p pixels (text_overlay.REFERENCE_SHORT_SIDE_PX),
 # so the preview measures everything against the 1080p canvas.
 
@@ -244,7 +244,7 @@ class VideoEditorView(ctk.CTkFrame):
         self._preview_panel = InteractivePreviewPanel(
             center, on_play_toggled=self._on_play_toggled, on_seek=self._on_preview_seek,
             on_selection_changed=self._on_preview_selection_changed, on_element_edited=self._on_element_edited,
-            on_delete_requested=self._on_element_delete_requested,
+            on_delete_requested=self._on_element_delete_requested, on_stop=self._on_stop_clicked,
         )
         self._preview_panel.pack(fill="both", expand=True)
 
@@ -255,6 +255,7 @@ class VideoEditorView(ctk.CTkFrame):
             inspector_column, on_element_edited=self._on_element_edited,
             on_delete_requested=self._on_element_delete_requested,
             on_duplicate_requested=self._on_element_duplicate_requested,
+            on_layer_requested=self._on_layer_requested,
         )
         self._inspector_panel.pack(fill="both", expand=True)
         add_row = ctk.CTkFrame(inspector_column, fg_color="transparent")
@@ -645,6 +646,10 @@ class VideoEditorView(ctk.CTkFrame):
             self.after_cancel(self._playback_after_id)
             self._playback_after_id = None
 
+    def _on_stop_clicked(self) -> None:
+        self._stop_playback()
+        self._on_preview_seek(0.0)
+
     def _on_preview_seek(self, t: float) -> None:
         engine = self._engine
         if engine is None:
@@ -825,7 +830,7 @@ class VideoEditorView(ctk.CTkFrame):
             # Make sure it's on screen in the preview so it can be dragged there too.
             if self._engine is not None and not (element.start_seconds <= self._engine.position < element.end_seconds):
                 self._on_preview_seek(element.start_seconds)
-        elif track in ("video", "effects"):
+        elif track in ("video", "effects", "sound"):
             self._set_selection(("clip", index))
             if track == "effects":
                 self._on_category_selected("filters")
@@ -1022,6 +1027,15 @@ class VideoEditorView(ctk.CTkFrame):
             element, x_fraction=min(1.0, element.x_fraction + 0.05), y_fraction=min(1.0, element.y_fraction + 0.05),
         )
         self._add_element(kind, copy)
+
+    def _on_layer_requested(self, kind: str, index: int, delta: int) -> None:
+        track = "text" if kind == "text" else "stickers"
+        new_state, new_index = track_layout.reorder_overlay(self._editor_state(), track, index, delta)
+        if new_index == index:
+            self._set_status("Elementas jau " + ("viršuje." if delta > 0 else "apačioje."), kind="muted")
+            return
+        self._apply_editor_state(new_state, label="Sluoksnis")
+        self._set_selection((kind, new_index))
 
     def _on_quick_add_text(self) -> None:
         start, end = self._quick_add_window()
@@ -1340,12 +1354,11 @@ class VideoEditorView(ctk.CTkFrame):
 
     def _on_caption_style_changed(self, style: CaptionStyle | None) -> None:
         self._caption_style = style
-        # A style change invalidates any already-edited lines (they
-        # were grouped/reviewed under the PREVIOUS style's own
-        # animation choice) - cleared so export falls back to the
-        # existing auto-transcribe-at-export-time path rather than
-        # silently reusing stale, possibly-mismatched edited lines.
-        self._caption_lines = None
+        # Edited/imported lines are kept: they're drawn as whole lines
+        # whatever the style (build_caption_filter_from_lines()), so
+        # changing a color or the font never throws the person's
+        # subtitle text away, and turning captions off and on again
+        # brings the same lines back.
         self._record_history("Subtitrų stilius")
         self._refresh_track_timeline()
         self._on_scene_changed()

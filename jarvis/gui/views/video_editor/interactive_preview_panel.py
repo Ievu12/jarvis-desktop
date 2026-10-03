@@ -84,6 +84,7 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         on_selection_changed: Callable[[ElementRef | None], None],
         on_element_edited: Callable[[str, int, object, bool], None],
         on_delete_requested: Callable[[str, int], None],
+        on_stop: Callable[[], None] | None = None,
         **kwargs,
     ) -> None:
         """`on_element_edited(kind, index, new_element, final)` fires
@@ -93,6 +94,7 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self._on_play_toggled = on_play_toggled
         self._on_seek = on_seek
+        self._on_stop = on_stop
         self._on_selection_changed = on_selection_changed
         self._on_element_edited = on_element_edited
         self._on_delete_requested = on_delete_requested
@@ -161,7 +163,15 @@ class InteractivePreviewPanel(ctk.CTkFrame):
             fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(side="left", padx=(0, theme.SPACE_XS))
         self._play_button = ctk.CTkButton(transport, text="▶", width=48, command=self._on_play_toggled)
-        self._play_button.pack(side="left", padx=(0, theme.SPACE_SM))
+        self._play_button.pack(side="left", padx=(0, theme.SPACE_XS))
+        if on_stop is not None:
+            # Stop = pause and go back to the start, like a player's ⏹.
+            self.stop_button = ctk.CTkButton(
+                transport, text="⏹", width=36, command=on_stop,
+                fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
+                border_color=theme.BORDER_SUBTLE,
+            )
+            self.stop_button.pack(side="left", padx=(0, theme.SPACE_SM))
         self._time_label = ctk.CTkLabel(
             transport, text="00:00.0 / 00:00.0", width=120,
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),

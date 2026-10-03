@@ -256,3 +256,79 @@ def test_text_panel_edit_keeps_style_fields(root):
     root.withdraw()
     root.update()
     assert emitted[-1] == [dataclasses.replace(styled, text="Sveiki visi")]
+
+
+# --- stage 5: animation groups, opacity, layers, clip sound ----------------------------------------
+
+
+def _buttons(widget) -> dict:
+    found = {}
+    for child in widget.winfo_children():
+        if isinstance(child, ctk.CTkButton) and child.cget("text"):
+            found[child.cget("text")] = child
+        found.update(_buttons(child))
+    return found
+
+
+def test_inspector_animation_groups_opacity_and_layers(root):
+    from jarvis.video_editor.text_overlay import TextOverlay
+
+    layers = []
+    edits = []
+    inspector = ElementInspectorPanel(
+        root, on_element_edited=lambda kind, index, new, final: edits.append((kind, index, new, final)),
+        on_delete_requested=lambda kind, index: None, on_duplicate_requested=lambda kind, index: None,
+        on_layer_requested=lambda kind, index, delta: layers.append((kind, index, delta)),
+    )
+    inspector.pack()
+    text = TextOverlay(text="Labas", start_seconds=0, end_seconds=3, animation="bounce")
+    inspector.show_element("text", 2, text)
+    menus = {m.get(): m for m in _dropdowns(inspector)}
+    assert {"Šokinėjimo", "Šokinėjimas", "Iš kairės"} <= set(menus)
+    group, animation = menus["Šokinėjimo"], menus["Šokinėjimas"]
+    group._command("Slinkimo")
+    assert animation.cget("values") == ["Be animacijos", "Įslinkimas", "Išslinkimas"]
+    animation._command("Įslinkimas")
+    assert edits[-1][2].animation == "slide_in"
+    inspector.refresh_values(edits[-1][2])
+    menus["Iš kairės"]._command("Iš dešinės")
+    assert edits[-1][2].direction == "right"
+    inspector._edit(final=True, opacity=0.4, speed=2.0)
+    assert (edits[-1][2].opacity, edits[-1][2].speed) == (0.4, 2.0)
+
+    _buttons(inspector)["⬆ Į priekį"].invoke()
+    _buttons(inspector)["⬇ Atgal"].invoke()
+    assert layers == [("text", 2, 1), ("text", 2, -1)]
+
+
+def test_inspector_clip_sound_mute_and_volume(root):
+    from jarvis.video_editor.timeline import TimelineClip
+
+    inspector, edits = _inspector(root)
+    clip = TimelineClip(clip_id="c", media_item_id="v", source_in_seconds=0, source_out_seconds=4, volume=0.8)
+    inspector.show_element("clip", 0, clip, title="klipas.mp4", max_transition=None)
+    mute = _buttons(inspector)["🔇 Nutildyti"]
+    mute.invoke()
+    assert edits[-1][2].volume == 0.0 and mute.cget("text") == "🔊 Įjungti garsą"
+    mute.invoke()
+    assert edits[-1][2].volume == 0.8  # back to the volume it had
+    inspector._edit(final=True, audio_fade_in_seconds=1.5)
+    assert edits[-1][2].audio_fade_in_seconds == 1.5
+
+
+def test_captions_panel_import_srt_and_add_line(root, tmp_path):
+    from jarvis.gui.views.video_editor.captions_panel import CaptionsPanel
+
+    styles, lines = [], []
+    panel = CaptionsPanel(root, on_style_changed=styles.append, on_lines_changed=lines.append)
+    bad = tmp_path / "bad.srt"
+    bad.write_text("nieko", encoding="utf-8")
+    assert not panel.import_srt_file(bad)
+    assert "nerasta" in panel._lines_status.cget("text")
+    good = tmp_path / "good.srt"
+    good.write_bytes("1\n00:00:01,000 --> 00:00:02,000\nŽąsys ąčęėįšųūž\n".encode("cp1257"))
+    assert panel.import_srt_file(good)
+    assert styles[-1] is not None  # captions were switched on
+    assert [line.text for line in lines[-1]] == ["Žąsys ąčęėįšųūž"]
+    panel.add_line()
+    assert (lines[-1][-1].start_seconds, lines[-1][-1].end_seconds) == (2.0, 4.0)

@@ -16,6 +16,7 @@ just the backend modules in isolation."""
 
 from __future__ import annotations
 
+import dataclasses
 import queue
 import subprocess
 import time
@@ -356,7 +357,7 @@ def test_captions_panel_shows_export_srt_button_once_lines_are_set(root):
             yield from _walk(child)
 
     buttons = [
-        w for w in _walk(panel) if isinstance(w, ctk.CTkButton) and "Export Subtitles" in w.cget("text")
+        w for w in _walk(panel) if isinstance(w, ctk.CTkButton) and "Išsaugoti SRT" in w.cget("text")
     ]
     assert len(buttons) == 1
 
@@ -367,16 +368,18 @@ def test_generate_subtitles_requires_an_open_project(root):
     assert view._caption_lines is None
 
 
-def test_changing_caption_style_clears_previously_edited_lines(root):
+def test_changing_caption_style_keeps_edited_lines(root):
     from jarvis.video_editor.captions import CaptionLine
 
     view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
-    view._caption_lines = [CaptionLine(text="Stale edit", start_seconds=0.0, end_seconds=1.0)]
+    edited = [CaptionLine(text="Mano tekstas", start_seconds=0.0, end_seconds=1.0)]
+    view._caption_lines = list(edited)
 
     view._captions_panel._toggle_var.set("on")
     view._captions_panel._on_toggle()
+    view._captions_panel.apply_preset("Geltonas")
 
-    assert view._caption_lines is None
+    assert view._caption_lines == edited
 
 
 @pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
@@ -1399,3 +1402,44 @@ def test_filters_transitions_and_sticker_drop_go_through_one_history(root, tmp_p
     view._on_undo()
     assert view._stickers == []
     assert view._timeline_panel.timeline.items[0].transition_out.duration_seconds == 1.0
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_stage5_stop_clip_sound_layers_and_srt(root, tmp_path):
+    """Stage 5: ⏹ goes back to the start, a clip's sound is muted from
+    its lane, texts change layer, and imported SRT lines survive a
+    subtitle style change - each one Undo step."""
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view.pack(fill="both", expand=True)
+    _setup_project_with_clip(view, tmp_path, duration=2)
+
+    view._on_preview_seek(1.2)
+    view._preview_panel.stop_button.invoke()
+    assert view._engine.position == 0.0 and not view._engine.playing
+
+    assert [b.label for b in view._track_timeline._bars["sound"]] == ["🔊 100%"]
+    view._on_track_selection_changed(("sound", 0))
+    assert view._selection == ("clip", 0)
+    view._inspector_panel._edit(final=True, volume=0.0)
+    assert view._timeline_panel.timeline.items[0].volume == 0.0
+    assert [b.label for b in view._track_timeline._bars["sound"]] == ["🔇 Nutildyta"]
+    view._on_undo()
+    assert view._timeline_panel.timeline.items[0].volume == 1.0
+
+    view._on_quick_add_text()
+    view._on_quick_add_text()
+    view._on_element_edited("text", 0, dataclasses.replace(view._text_overlays[0], text="Apačioje"), True)
+    view._set_selection(("text", 0))
+    view._on_layer_requested("text", 0, +1)
+    assert [o.text for o in view._text_overlays] == ["Naujas tekstas", "Apačioje"]
+    assert view._selection == ("text", 1) and view._history.undo_label == "Sluoksnis"
+
+    srt = tmp_path / "subtitrai.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,500\nSveiki, čia Ieva\n", encoding="utf-8")
+    assert view._captions_panel.import_srt_file(srt)
+    assert [line.text for line in view._caption_lines] == ["Sveiki, čia Ieva"]
+    assert view._caption_style is not None
+    view._captions_panel.apply_preset("TikTok")
+    assert [line.text for line in view._caption_lines] == ["Sveiki, čia Ieva"]
+    view._captions_panel.add_line()
+    assert [(line.start_seconds, line.end_seconds) for line in view._caption_lines][-1] == (1.5, 3.5)

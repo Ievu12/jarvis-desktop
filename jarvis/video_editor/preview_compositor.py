@@ -258,11 +258,12 @@ def _draw_text_overlay(layer: Image.Image, overlay: TextOverlay, *, t: float, sc
     local = t - overlay.start_seconds
     animation = overlay.animation
 
-    if animation == "fade":
-        alpha = _fade_alpha(overlay, t)
+    # drawtext's alpha (fade x opacity) scales text, outline, shadow and box alike.
+    alpha = (_fade_alpha(overlay, t) if animation == "fade" else 1.0) * overlay.opacity
+    if alpha < 1.0:
         fill = _with_alpha(fill, alpha)
         look = look.faded(alpha)
-    elif animation in ("slide_in", "slide_out"):
+    if animation in ("slide_in", "slide_out"):
         offset = (-1 if overlay.direction == "left" else 1) * 600 * scale
         if animation == "slide_in":
             duration = max(0.05, 0.35 / overlay.speed)
@@ -281,7 +282,8 @@ def _draw_text_overlay(layer: Image.Image, overlay: TextOverlay, *, t: float, sc
         jitter = 4 * overlay.intensity * scale * math.sin(37 * local) * math.sin(11 * local)
         offset = 3 * overlay.intensity * scale
         for color, extra in (("red@0.6", -offset), ("cyan@0.6", offset)):
-            text_render.draw_text(layer, text, font=font, x=x + jitter + extra, y=y, fill=text_render.parse_color(color))
+            ghost = _with_alpha(text_render.parse_color(color), overlay.opacity)
+            text_render.draw_text(layer, text, font=font, x=x + jitter + extra, y=y, fill=ghost)
         x += jitter
     elif animation == "glow":
         # The halo is drawtext's border, so it takes the outline's place.
@@ -301,6 +303,8 @@ def _draw_rotated_text(layer: Image.Image, overlay: TextOverlay, *, t: float, sc
     font = text_render.load_font(overlay.font_file, overlay.font_size * scale)
     block, metrics = text_render.render_text_block(overlay.text, font=font, fill=fill, look=look)
     rotated = block.rotate(-overlay.rotation_degrees, expand=True, resample=Image.Resampling.BICUBIC)
+    if overlay.opacity < 1.0:  # the export's colorchannelmixer=aa on the whole rendered block
+        rotated.putalpha(rotated.getchannel("A").point(lambda a: round(a * overlay.opacity)))
     center_x = (layer.width - metrics.width) * overlay.x_fraction + metrics.width / 2
     center_y = (layer.height - metrics.height) * overlay.y_fraction + metrics.height / 2
     _paste(layer, rotated, center_x - rotated.width / 2, center_y - rotated.height / 2)
