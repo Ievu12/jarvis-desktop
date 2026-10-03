@@ -21,7 +21,7 @@ from typing import Callable
 
 from PIL import Image
 
-from jarvis.video_editor import reels_render
+from jarvis.video_editor import reels_media, reels_render
 from jarvis.video_editor.multisource_export import export_timeline
 from jarvis.video_editor.reels import ReelsLayers
 
@@ -74,6 +74,7 @@ def render_overlay_video(
         raise ReelsExportError(f"Nepavyko paleisti FFmpeg: {e}") from e
 
     empty = bytes(width * height * 4)
+    frames = reels_media.VideoFrames()  # its own video decoders, at export size
     last_plan: tuple | None = None
     last_bytes = empty
     cancelled = False
@@ -87,7 +88,7 @@ def render_overlay_video(
             if ops != last_plan:
                 if ops:
                     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-                    reels_render.paint(layer, ops)
+                    reels_render.paint(layer, ops, frames=frames)
                     last_bytes = layer.tobytes()
                 else:
                     last_bytes = empty
@@ -99,6 +100,7 @@ def render_overlay_video(
     except (BrokenPipeError, OSError):
         pass  # ffmpeg died; its own error is reported below
     finally:
+        frames.close()
         if cancelled:
             proc.kill()
         proc.wait()
@@ -156,9 +158,14 @@ def compose_onto_frame(frame_path: Path, layers: ReelsLayers | None, *, t: float
         return frame_path
     with Image.open(frame_path) as opened:
         frame = opened.convert("RGBA")
-    layer = reels_render.render_frame(
-        layers, t=t, width=frame.width, height=frame.height, scale=overlay_scale(frame.width, frame.height),
-    )
+    frames = reels_media.VideoFrames()
+    try:
+        layer = reels_render.render_frame(
+            layers, t=t, width=frame.width, height=frame.height, scale=overlay_scale(frame.width, frame.height),
+            frames=frames,
+        )
+    finally:
+        frames.close()
     frame.alpha_composite(layer)
     save_kwargs = {"quality": 95} if frame_path.suffix.lower() in (".jpg", ".jpeg") else {}
     frame.convert("RGB").save(frame_path, **save_kwargs)

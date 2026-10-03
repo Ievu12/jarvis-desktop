@@ -356,6 +356,8 @@ class InteractivePreviewPanel(ctk.CTkFrame):
     def _can_rotate(self, kind: str, index: int) -> bool:
         if kind == "reels_caption":
             return False
+        if kind in ("reels_card", "reels_insert"):
+            return True
         if kind == "sticker":
             return self._scene.stickers[index].animation != "spin"
         return self._scene.text_overlays[index].animation in ROTATABLE_TEXT_ANIMATIONS
@@ -388,6 +390,9 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         kind, index = ref
         if kind == "reels_caption":
             return self._scene.reels is not None and self._scene.reels.captions is not None
+        if kind in ("reels_card", "reels_insert"):
+            items = self._reels_items(kind)
+            return 0 <= index < len(items)
         items = self._scene.text_overlays if kind == "text" else self._scene.stickers
         return 0 <= index < len(items)
 
@@ -398,9 +403,16 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         if notify:
             self._on_selection_changed(ref)
 
+    def _reels_items(self, kind: str) -> tuple:
+        if self._scene.reels is None:
+            return ()
+        return self._scene.reels.cards if kind == "reels_card" else self._scene.reels.inserts
+
     def _element(self, kind: str, index: int):
         if kind == "reels_caption":
             return self._scene.reels.captions
+        if kind in ("reels_card", "reels_insert"):
+            return self._reels_items(kind)[index]
         return (self._scene.text_overlays if kind == "text" else self._scene.stickers)[index]
 
     def _on_press(self, event) -> None:
@@ -483,6 +495,22 @@ class InteractivePreviewPanel(ctk.CTkFrame):
             else:
                 return None
             return dataclasses.replace(element, style=style)
+
+        if isinstance(element, (reels.TextCard, reels.MediaInsert)):
+            if mode == "move":
+                return dataclasses.replace(
+                    element,
+                    x_fraction=round(_clamp((box.center_x + x - drag["start_x"]) / width, 0.0, 1.0), 4),
+                    y_fraction=round(_clamp((box.center_y + y - drag["start_y"]) / height, 0.0, 1.0), 4),
+                )
+            if mode == "resize":
+                start_distance = max(1.0, math.hypot(drag["start_x"] - box.center_x, drag["start_y"] - box.center_y))
+                ratio = math.hypot(x - box.center_x, y - box.center_y) / start_distance
+                if isinstance(element, reels.TextCard):
+                    return dataclasses.replace(element, scale=round(_clamp(element.scale * ratio, 0.2, 4.0), 3))
+                return dataclasses.replace(
+                    element, width_fraction=round(_clamp(element.width_fraction * ratio, 0.05, 1.5), 4),
+                )
 
         if mode == "move":
             center_x = box.center_x + (x - drag["start_x"])

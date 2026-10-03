@@ -44,6 +44,7 @@ from jarvis.gui.views.video_editor.interactive_preview_panel import InteractiveP
 from jarvis.gui.views.video_editor.looks_panel import FiltersPanel, TransitionsPanel
 from jarvis.gui.views.video_editor.music_panel import MusicPanel
 from jarvis.gui.views.video_editor.reel_templates_panel import ReelTemplatesPanel
+from jarvis.gui.views.video_editor.reels_elements_panel import CardsPanel, InsertsPanel, ReelsTabs
 from jarvis.gui.views.video_editor.reels_panel import ReelsPanel
 from jarvis.gui.views.video_editor.stickers_panel import StickersPanel
 from jarvis.gui.views.video_editor.speech_sync_panel import SpeechSyncPanel
@@ -60,7 +61,7 @@ from jarvis.gui.worker import (
 )
 from jarvis.video_editor import db, media_import, multisource_export as mse, playback, storage
 from jarvis.video_editor import preview_compositor as pc
-from jarvis.video_editor import reels, reels_export, track_layout
+from jarvis.video_editor import reels, reels_export, reels_media, track_layout
 from jarvis.video_editor.reels_keywords import suggest_keywords
 from jarvis.video_editor.audio_mixing import AudioMixingError, MusicTrack, build_music_mix_filter
 from jarvis.video_editor.captions import (
@@ -107,7 +108,7 @@ _PREVIEW_AUDIO_DELAY_MS = 600
 _PREVIEW_CANVAS_TIER = "1080p"
 _LIBRARY_WIDTH = 440
 _INSPECTOR_WIDTH = 290
-_TRACKS_HEIGHT = 280
+_TRACKS_HEIGHT = 320
 # Overlay sizes are 1080p pixels (text_overlay.REFERENCE_SHORT_SIDE_PX),
 # so the preview measures everything against the 1080p canvas.
 
@@ -149,9 +150,12 @@ _CATEGORIES: tuple[tuple[str, str], ...] = (
 # shows/hides which already-built panel widgets are packed into the
 # content area, so no state (a project's open Timeline, an in-progress
 # edit) is ever lost by changing category.
+_REELS_ELEMENT_KINDS = {"reels_card": "reels_cards", "reels_insert": "reels_inserts"}
+"""Reels cards/inserts selection kind -> their track timeline lane."""
+
 _CATEGORY_PANEL_ATTRS: dict[str, tuple[str, ...]] = {
     "clips": ("_import_panel", "_timeline_panel"),
-    "reels": ("_reels_panel",),
+    "reels": ("_reels_tabs",),
     "animations": ("_timeline_panel",),
     "stickers": ("_stickers_panel",),
     "transitions": ("_transitions_panel", "_timeline_panel"),
@@ -312,11 +316,30 @@ class VideoEditorView(ctk.CTkFrame):
 
         self._text_overlay_panel = TextOverlayPanel(self._scroll, on_overlays_changed=self._on_text_overlays_changed)
 
+        # "📱 Reels": subtitles, text cards and picture/video inserts, one tab each.
+        self._reels_tabs = ReelsTabs(self._scroll)
+        reels_duration = lambda: self._engine.duration if self._engine is not None else 0.0  # noqa: E731
         self._reels_panel = ReelsPanel(
-            self._scroll, on_captions_changed=self._on_reels_captions_changed,
+            self._reels_tabs.body, on_captions_changed=self._on_reels_captions_changed,
             on_transcribe_requested=self._on_reels_transcribe_requested, on_seek=self._on_preview_seek,
-            get_duration=lambda: self._engine.duration if self._engine is not None else 0.0,
+            get_duration=reels_duration,
         )
+        self._reels_cards_panel = CardsPanel(
+            self._reels_tabs.body, on_items_changed=lambda items, label, key: self._on_reels_items_changed(
+                "cards", items, label, key),
+            on_select=lambda index: self._on_reels_panel_selected("reels_card", index),
+            on_seek=self._on_preview_seek, get_time=self._playhead_seconds, get_duration=reels_duration,
+        )
+        self._reels_inserts_panel = InsertsPanel(
+            self._reels_tabs.body, on_items_changed=lambda items, label, key: self._on_reels_items_changed(
+                "inserts", items, label, key),
+            on_select=lambda index: self._on_reels_panel_selected("reels_insert", index),
+            on_seek=self._on_preview_seek, get_time=self._playhead_seconds, get_duration=reels_duration,
+            on_file_chosen=self._on_reels_insert_file_chosen, get_project_media=self._project_media_choices,
+        )
+        self._reels_tabs.add_page("Subtitrai", self._reels_panel)
+        self._reels_tabs.add_page("Kortelės", self._reels_cards_panel)
+        self._reels_tabs.add_page("Intarpai", self._reels_inserts_panel)
 
         self._speech_sync_panel = SpeechSyncPanel(self._scroll, get_words=lambda: self._last_transcribed_words)
 
@@ -364,7 +387,7 @@ class VideoEditorView(ctk.CTkFrame):
 
         all_panels = (
             self._import_panel, self._filters_panel, self._transitions_panel, self._timeline_panel, self._captions_panel,
-            self._text_overlay_panel, self._reels_panel, self._speech_sync_panel, self._stickers_panel, self._music_panel,
+            self._text_overlay_panel, self._reels_tabs, self._speech_sync_panel, self._stickers_panel, self._music_panel,
             self._reel_templates_panel, self._ai_assistant_panel, self._export_panel,
         )
         for panel in all_panels:
@@ -496,7 +519,7 @@ class VideoEditorView(ctk.CTkFrame):
         self._stickers = list(overlays.stickers)
         self._stickers_panel.set_stickers(self._stickers)
         self._reels = overlays.reels
-        self._reels_panel.set_captions(self._reels.captions if self._reels is not None else None)
+        self._show_reels_in_panels(self._reels)
         self._panel_sync_originals.clear()
 
         self._captions_panel.reset()
@@ -780,6 +803,7 @@ class VideoEditorView(ctk.CTkFrame):
         if self._engine is not None:
             self._engine.close()
         self._audio_player.stop()
+        reels_media.DEFAULT_FRAMES.close()
 
     # --- live preview: overlays, selection, interactive editing --------------------------------
 
@@ -814,6 +838,13 @@ class VideoEditorView(ctk.CTkFrame):
                 return  # its settings are in the Reels tools on the left
             self._selection = None
             ref = None
+        if ref is not None and ref[0] in _REELS_ELEMENT_KINDS:
+            if 0 <= ref[1] < len(self._reels_items(ref[0])):
+                if self._inspector_panel.shown is not None:
+                    self._inspector_panel.show_nothing()
+                return  # its settings are in the Reels tools on the left
+            self._selection = None
+            ref = None
         if ref is not None:
             kind, index = ref
             if kind in ("text", "sticker"):
@@ -841,20 +872,23 @@ class VideoEditorView(ctk.CTkFrame):
         """One selection shared by the preview, the track timeline and
         the settings panel ("text"/"sticker"/"clip", index)."""
         self._selection = ref
-        if ref is None or ref[0] in ("text", "sticker", "reels_caption"):
+        if ref is None or ref[0] in ("text", "sticker", "reels_caption", *_REELS_ELEMENT_KINDS):
             self._preview_panel.select(ref)
         else:
             self._preview_panel.select(None)
         track_ref = None
         if ref is not None and ref[0] != "reels_caption":
-            track_ref = ({"text": "text", "sticker": "stickers", "clip": "video"}[ref[0]], ref[1])
+            track_ref = ({"text": "text", "sticker": "stickers", "clip": "video", **_REELS_ELEMENT_KINDS}[ref[0]],
+                         ref[1])
         self._track_timeline.select(track_ref)
         self._sync_inspector_with_selection()
 
     def _on_preview_selection_changed(self, ref: tuple[str, int] | None) -> None:
         self._set_selection(ref)
         if ref is not None and ref[0] == "reels_caption":
-            self._on_category_selected("reels")
+            self._show_reels_tab("Subtitrai")
+        elif ref is None or ref[0] in _REELS_ELEMENT_KINDS:
+            self._select_in_reels_panels(ref)
 
     def _on_track_selection_changed(self, ref: tuple[str, int] | None) -> None:
         """A bar was clicked on the track timeline."""
@@ -867,6 +901,13 @@ class VideoEditorView(ctk.CTkFrame):
             self._set_selection((kind, index))
             element = self._items_for(kind)[index]
             # Make sure it's on screen in the preview so it can be dragged there too.
+            if self._engine is not None and not (element.start_seconds <= self._engine.position < element.end_seconds):
+                self._on_preview_seek(element.start_seconds)
+        elif track in ("reels_cards", "reels_inserts"):
+            kind = "reels_card" if track == "reels_cards" else "reels_insert"
+            self._set_selection((kind, index))
+            self._select_in_reels_panels((kind, index))
+            element = self._reels_items(kind)[index]
             if self._engine is not None and not (element.start_seconds <= self._engine.position < element.end_seconds):
                 self._on_preview_seek(element.start_seconds)
         elif track in ("video", "effects", "sound"):
@@ -982,6 +1023,9 @@ class VideoEditorView(ctk.CTkFrame):
         if kind == "reels_caption":
             self._on_reels_caption_dragged(new_element, final)
             return
+        if kind in _REELS_ELEMENT_KINDS:
+            self._on_reels_element_dragged(kind, index, new_element, final)
+            return
         items = self._items_for(kind)
         if not (0 <= index < len(items)):
             return
@@ -1035,6 +1079,14 @@ class VideoEditorView(ctk.CTkFrame):
     def _on_element_delete_requested(self, kind: str, index: int) -> None:
         if kind == "reels_caption":
             return  # phrases are deleted in the Reels tools or on the timeline, never all at once by a key
+        if kind in _REELS_ELEMENT_KINDS:
+            self._set_selection(None)
+            self._apply_editor_state(
+                track_layout.delete_element(self._editor_state(), _REELS_ELEMENT_KINDS[kind], index),
+                label="Ištrinta kortelė" if kind == "reels_card" else "Ištrintas intarpas",
+            )
+            self._select_in_reels_panels(None)
+            return
         if kind == "clip":
             self._set_selection(None)
             self._apply_editor_state(
@@ -1907,6 +1959,120 @@ class VideoEditorView(ctk.CTkFrame):
             coalesce_key="reels_caption_drag",
         )
 
+    def _show_reels_in_panels(self, layers: reels.ReelsLayers | None) -> None:
+        self._reels_panel.set_captions(layers.captions if layers is not None else None)
+        self._reels_cards_panel.set_items(layers.cards if layers is not None else ())
+        self._reels_inserts_panel.set_items(layers.inserts if layers is not None else ())
+
+    def _reels_items(self, kind: str) -> tuple:
+        if self._reels is None:
+            return ()
+        return self._reels.cards if kind == "reels_card" else self._reels.inserts
+
+    def _playhead_seconds(self) -> float:
+        return self._engine.position if self._engine is not None else 0.0
+
+    def _show_reels_tab(self, tab: str) -> None:
+        if self._active_category != "reels":
+            self._on_category_selected("reels")
+        if self._reels_tabs.current != tab:
+            self._reels_tabs.show_tab(tab)
+
+    def _select_in_reels_panels(self, ref: tuple[str, int] | None) -> None:
+        """Shows the card/insert picked in the preview or on the timeline
+        in its Reels tab (and clears the other tab's selection)."""
+        for kind, panel, tab in (("reels_card", self._reels_cards_panel, "Kortelės"),
+                                 ("reels_insert", self._reels_inserts_panel, "Intarpai")):
+            if ref is not None and ref[0] == kind:
+                self._show_reels_tab(tab)
+                if panel.selected != ref[1]:
+                    panel.select(ref[1])
+            elif panel.selected is not None:
+                panel.select(None)
+
+    def _on_reels_panel_selected(self, kind: str, index: int | None) -> None:
+        """A card/insert was picked (or unpicked) in the Reels tools."""
+        if index is None:
+            if self._selection is not None and self._selection[0] == kind:
+                self._set_selection(None)
+            return
+        self._set_selection((kind, index))
+
+    def _on_reels_items_changed(self, field: str, items: tuple, label: str, coalesce_key: str | None) -> None:
+        """Cards or inserts changed in the Reels tools."""
+        panel = self._reels_cards_panel if field == "cards" else self._reels_inserts_panel
+        if self._current_project is None:
+            panel.show_message("Pirmiausia sukurkite arba atidarykite projektą.", kind="error")
+            panel.set_items(())
+            return
+        layers = dataclasses.replace(self._reels or reels.ReelsLayers(), **{field: tuple(items)})
+        self._apply_editor_state(
+            dataclasses.replace(self._editor_state(), reels=layers), label=label, coalesce_key=coalesce_key,
+        )
+
+    def _on_reels_element_dragged(self, kind: str, index: int, element, final: bool) -> None:
+        """A card/insert was moved, resized or rotated in the preview."""
+        items = self._reels_items(kind)
+        if not (0 <= index < len(items)) or element.validate():
+            return
+        field = "cards" if kind == "reels_card" else "inserts"
+        layers = dataclasses.replace(self._reels, **{field: items[:index] + (element,) + items[index + 1:]})
+        if not final:
+            self._reels = layers
+            self._cancel_exact_frame()
+            self._preview_panel.update_scene(self._current_scene())
+            return
+        self._apply_editor_state(
+            dataclasses.replace(self._editor_state(), reels=layers),
+            label="Kortelės vieta" if kind == "reels_card" else "Intarpo vieta", coalesce_key=f"{kind}:{index}",
+        )
+
+    def _project_media_choices(self) -> list[tuple[str, str]]:
+        """Photos and videos already in the project, for the inserts tab."""
+        choices = []
+        for media in self._media_items.values():
+            if reels.insert_kind_for(str(media.stored_path)) is not None:
+                choices.append((media.original_filename, str(media.stored_path)))
+        return choices
+
+    def _on_reels_insert_file_chosen(self, path: str) -> None:
+        """A photo/video for a new insert: copied into the project (so the
+        project keeps working if the original is moved), then added at
+        the playhead for up to 5 seconds."""
+        panel = self._reels_inserts_panel
+        if self._current_project is None:
+            panel.show_message("Pirmiausia sukurkite arba atidarykite projektą.", kind="error")
+            return
+        kind = reels.insert_kind_for(path)
+        if kind is None:
+            panel.show_message("Tinka nuotraukos (JPG, PNG, WEBP, GIF) ir video (MP4, MOV, WEBM).", kind="error")
+            return
+        source = Path(path)
+        try:
+            project_dir = self._current_project.media_dir.resolve()
+            stored = source if source.resolve().is_relative_to(project_dir) else storage.copy_media_into_project(
+                self._current_project, source)
+        except (storage.VideoEditorStorageError, OSError) as e:
+            panel.show_message(f"Nepavyko įkelti failo: {e}", kind="error")
+            return
+        length = 5.0
+        if kind == "video":
+            duration = reels_media.media_duration(str(stored))
+            if duration:
+                length = min(length, duration)
+        window = panel.window(length)
+        if window is None:
+            return
+        insert = reels.MediaInsert(
+            path=str(stored), kind=kind, start_seconds=window[0], end_seconds=window[1],
+            aspect_ratio=round(reels_media.media_aspect_ratio(str(stored), kind), 4),
+        )
+        problems = insert.validate()
+        if problems:
+            panel.show_message(problems[0], kind="error")
+            return
+        panel.add_insert(insert)
+
     def _on_reels_transcribe_requested(self, language: str) -> None:
         """Recognizes the speech of the whole timeline (every clip's own
         sound, as heard in the export, without the music) word by word."""
@@ -2037,7 +2203,7 @@ class VideoEditorView(ctk.CTkFrame):
             self._caption_lines = list(state.caption_lines) if state.caption_lines is not None else None
             self._music_track = state.music_track
             if state.reels != previous.reels:
-                self._reels_panel.set_captions(state.reels.captions if state.reels is not None else None)
+                self._show_reels_in_panels(state.reels)
             self._reels = state.reels
             self._panel_sync_originals.clear()
         finally:

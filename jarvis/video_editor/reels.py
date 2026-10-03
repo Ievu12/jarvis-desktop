@@ -362,18 +362,211 @@ def emphasize_matching(words: tuple[ReelsWord, ...], keywords: list[str]) -> tup
     return tuple(result)
 
 
+# --- element animations (cards and inserts) ---------------------------------------------------------
+
+EnterAnimation = Literal["none", "pop", "fade", "zoom", "slide_left", "slide_right", "slide_up", "slide_down", "bounce",
+                         "typewriter"]
+ENTER_ANIMATION_CHOICES: tuple[str, ...] = (
+    "pop", "fade", "zoom", "slide_left", "slide_right", "slide_up", "slide_down", "bounce", "typewriter", "none",
+)
+EXIT_ANIMATION_CHOICES: tuple[str, ...] = (
+    "fade", "pop", "zoom", "slide_left", "slide_right", "slide_up", "slide_down", "typewriter", "none",
+)
+ENTER_ANIMATION_LABELS: dict[str, str] = {
+    "pop": "Iššokimas", "fade": "Atsiradimas", "zoom": "Priartėjimas", "slide_left": "Iš kairės",
+    "slide_right": "Iš dešinės", "slide_up": "Iš apačios", "slide_down": "Iš viršaus", "bounce": "Įkrenta su šuoliu",
+    "typewriter": "Rašomoji mašinėlė", "none": "Be animacijos",
+}
+EXIT_ANIMATION_LABELS: dict[str, str] = {
+    "fade": "Išnykimas", "pop": "Susitraukimas", "zoom": "Nutolimas", "slide_left": "Į kairę",
+    "slide_right": "Į dešinę", "slide_up": "Į viršų", "slide_down": "Į apačią", "typewriter": "Ištrinama raidėmis",
+    "none": "Be animacijos",
+}
+INSERT_ENTER_CHOICES = tuple(c for c in ENTER_ANIMATION_CHOICES if c != "typewriter")
+INSERT_EXIT_CHOICES = tuple(c for c in EXIT_ANIMATION_CHOICES if c != "typewriter")
+
+
+def _validate_common(element, enter_choices, exit_choices) -> list[str]:
+    problems: list[str] = []
+    if element.end_seconds - element.start_seconds < 0.1:
+        problems.append("Pabaiga turi būti bent 0,1 s po pradžios.")
+    if element.start_seconds < 0:
+        problems.append("Pradžia negali būti neigiama.")
+    if not (0.0 <= element.x_fraction <= 1.0 and 0.0 <= element.y_fraction <= 1.0):
+        problems.append("Vieta turi būti kadro viduje.")
+    if not 0.0 <= element.opacity <= 1.0:
+        problems.append("Permatomumas turi būti nuo 0 iki 1.")
+    if element.enter_animation not in enter_choices:
+        problems.append(f"Nežinoma įėjimo animacija: {element.enter_animation!r}.")
+    if element.exit_animation not in exit_choices:
+        problems.append(f"Nežinoma išėjimo animacija: {element.exit_animation!r}.")
+    if element.enter_seconds < 0 or element.exit_seconds < 0:
+        problems.append("Animacijos trukmė negali būti neigiama.")
+    return problems
+
+
+# --- pop-up text cards ------------------------------------------------------------------------------
+
+CardDesign = Literal["pill", "tag", "glass", "neon", "ribbon", "outline"]
+CARD_DESIGN_CHOICES: tuple[str, ...] = ("pill", "tag", "glass", "neon", "ribbon", "outline")
+CARD_DESIGN_LABELS: dict[str, str] = {
+    "pill": "Piliulė", "tag": "Žyma", "glass": "Stiklas", "neon": "Neonas", "ribbon": "Juostelė", "outline": "Kontūras",
+}
+CARD_DESIGN_COLORS: dict[str, dict[str, str]] = {
+    "pill": {"text_color": "white", "background_color": "#E0457B", "accent_color": "#FFD400"},
+    "tag": {"text_color": "#111111", "background_color": "white", "accent_color": "#E0457B"},
+    "glass": {"text_color": "white", "background_color": "white@0.22", "accent_color": "white@0.7"},
+    "neon": {"text_color": "white", "background_color": "black@0.45", "accent_color": "#00F0FF"},
+    "ribbon": {"text_color": "#111111", "background_color": "#FFD400", "accent_color": "#111111"},
+    "outline": {"text_color": "#FFD400", "background_color": "black@0", "accent_color": "#FFD400"},
+}
+"""The colors each design starts with (applied when you switch design)."""
+CARD_QUICK_WORDS: tuple[str, ...] = ("STORYTELLING", "REELS", "ĮRAŠAI", "AUTOMATIZACIJA", "JARVIS")
+
+
+@dataclass(frozen=True)
+class TextCard:
+    """A small animated card with a word or two, popping up on top of the video."""
+
+    text: str
+    start_seconds: float
+    end_seconds: float
+    x_fraction: float = 0.5
+    y_fraction: float = 0.14
+    """Center of the card as fractions of the frame."""
+    scale: float = 1.0
+    design: CardDesign = "pill"
+    font: str = "arial_bold"
+    font_size: int = 46
+    uppercase: bool = True
+    text_color: str = "white"
+    background_color: str = "#E0457B"
+    accent_color: str = "#FFD400"
+    shadow: bool = True
+    rotation_degrees: float = 0.0
+    opacity: float = 1.0
+    enter_animation: str = "pop"
+    exit_animation: str = "fade"
+    enter_seconds: float = 0.35
+    exit_seconds: float = 0.25
+
+    def validate(self) -> list[str]:
+        problems = _validate_common(self, ENTER_ANIMATION_CHOICES, EXIT_ANIMATION_CHOICES)
+        if not self.text.strip():
+            problems.append("Kortelėje nėra teksto.")
+        if self.design not in CARD_DESIGN_CHOICES:
+            problems.append(f"Nežinomas dizainas: {self.design!r}.")
+        if not 0.2 <= self.scale <= 4.0:
+            problems.append("Dydis turi būti nuo 20 % iki 400 %.")
+        return problems
+
+    @property
+    def font_file(self) -> str:
+        return resolve_font_file(self.font)
+
+    @property
+    def shown_text(self) -> str:
+        return self.text.upper() if self.uppercase else self.text
+
+
+def apply_card_design(card: TextCard, design: str) -> TextCard:
+    return dataclasses.replace(card, design=design, **CARD_DESIGN_COLORS[design])
+
+
+# --- picture / video inserts -------------------------------------------------------------------------
+
+InsertKind = Literal["image", "video"]
+INSERT_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
+INSERT_VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi")
+
+
+@dataclass(frozen=True)
+class MediaInsert:
+    """A photo, screenshot or short video shown in a corner (or anywhere)
+    while the person talks - picture-in-picture."""
+
+    path: str
+    kind: InsertKind
+    start_seconds: float
+    end_seconds: float
+    aspect_ratio: float = 1.0
+    """Width / height of the picture."""
+    x_fraction: float = 0.73
+    y_fraction: float = 0.36  # under the cards, which sit at the very top
+    width_fraction: float = 0.42
+    corner_radius: float = 0.12
+    """Fraction of the shorter side (0 = square corners, 0.5 = round)."""
+    border_width: int = 0
+    border_color: str = "white"
+    shadow: float = 0.6
+    """0 = no shadow, 1 = strong."""
+    rotation_degrees: float = 0.0
+    opacity: float = 1.0
+    enter_animation: str = "pop"
+    exit_animation: str = "fade"
+    enter_seconds: float = 0.35
+    exit_seconds: float = 0.25
+    source_start_seconds: float = 0.0
+    """Video only: where in the video file the insert starts playing."""
+
+    def validate(self) -> list[str]:
+        problems = _validate_common(self, INSERT_ENTER_CHOICES, INSERT_EXIT_CHOICES)
+        if self.kind not in ("image", "video"):
+            problems.append(f"Nežinomas intarpo tipas: {self.kind!r}.")
+        if not 0.05 <= self.width_fraction <= 1.5:
+            problems.append("Plotis turi būti nuo 5 % iki 150 %.")
+        if not 0.0 <= self.corner_radius <= 0.5:
+            problems.append("Kampų apvalumas turi būti nuo 0 iki 0,5.")
+        if self.aspect_ratio <= 0:
+            problems.append("Netinkamos paveikslėlio proporcijos.")
+        if self.source_start_seconds < 0:
+            problems.append("Video pradžia negali būti neigiama.")
+        return problems
+
+    @property
+    def name(self) -> str:
+        """The file name as the person picked it (without the id the
+        project adds when it copies the file in)."""
+        from pathlib import Path
+
+        return re.sub(r"^[0-9a-f]{32}_", "", Path(self.path).name)
+
+
+def insert_kind_for(path) -> InsertKind | None:
+    suffix = str(path).lower().rsplit(".", 1)[-1] if "." in str(path) else ""
+    if f".{suffix}" in INSERT_IMAGE_EXTENSIONS:
+        return "image"
+    if f".{suffix}" in INSERT_VIDEO_EXTENSIONS:
+        return "video"
+    return None
+
+
+INSERT_POSITIONS: dict[str, tuple[float, float]] = {
+    "top_left": (0.27, 0.36), "top_right": (0.73, 0.36), "top": (0.5, 0.36), "center": (0.5, 0.5),
+    "bottom_left": (0.27, 0.62), "bottom_right": (0.73, 0.62),
+}
+INSERT_POSITION_LABELS: dict[str, str] = {
+    "top_left": "↖ Kairėje viršuje", "top": "⬆ Viršuje", "top_right": "↗ Dešinėje viršuje",
+    "bottom_left": "↙ Kairėje apačioje", "center": "⏺ Centre", "bottom_right": "↘ Dešinėje apačioje",
+}
+
+
 # --- all Reels layers --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ReelsLayers:
-    """Everything the Reels mode draws on top of the timeline."""
+    """Everything the Reels mode draws on top of the timeline. Drawn
+    bottom to top: inserts, cards, subtitles."""
 
     captions: ReelsCaptions | None = None
+    cards: tuple[TextCard, ...] = ()
+    inserts: tuple[MediaInsert, ...] = ()
 
     @property
     def is_empty(self) -> bool:
-        return self.captions is None or not self.captions.words or not self.captions.visible
+        no_captions = self.captions is None or not self.captions.words or not self.captions.visible
+        return no_captions and not self.cards and not self.inserts
 
 
 def to_dict(layers: ReelsLayers) -> dict:
@@ -393,7 +586,11 @@ def from_dict(data: dict | None) -> ReelsLayers | None:
             style=_build(ReelsCaptionStyle, captions_data.get("style") or {}),
             visible=bool(captions_data.get("visible", True)),
         )
-    return ReelsLayers(captions=captions)
+    return ReelsLayers(
+        captions=captions,
+        cards=tuple(_build(TextCard, c) for c in data.get("cards") or ()),
+        inserts=tuple(_build(MediaInsert, i) for i in data.get("inserts") or ()),
+    )
 
 
 def _build(cls, data: dict):

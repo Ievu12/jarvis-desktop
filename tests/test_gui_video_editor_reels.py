@@ -168,3 +168,89 @@ def test_export_burns_in_the_reels_subtitles(root, tmp_path):
         lower = frame.convert("RGB").crop((0, 800, 720, 1150))
     plain = Image.new("RGB", lower.size, (0x33, 0x55, 0x77))
     assert ImageChops.difference(lower, plain).convert("L").point(lambda v: 255 if v > 80 else 0).getbbox()
+
+
+# --- stage 2: text cards and picture/video inserts ---------------------------------------------------------
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_cards_and_inserts_from_the_reels_tabs_preview_timeline_undo_and_reopen(root, tmp_path):
+    import dataclasses
+
+    view = _reels_view(root, tmp_path)
+    view._reels_tabs.show_tab("Kortelės")
+    root.update()
+    cards = view._reels_cards_panel
+    assert cards.winfo_ismapped() and not view._reels_panel.winfo_ismapped()
+
+    view._on_preview_seek(1.0)
+    cards._add_card("STORYTELLING")
+    cards._text_entry.insert(0, "Mano žodis")
+    cards._add_own()
+    root.update()
+    assert [c.text for c in view._reels.cards] == ["STORYTELLING", "Mano žodis"]
+    first, second = view._reels.cards
+    assert first.start_seconds == pytest.approx(1.0, abs=0.05) and second.y_fraction > first.y_fraction
+    assert len(view._track_timeline._bars["reels_cards"]) == 2
+    assert view._selection == ("reels_card", 1)
+
+    cards._apply_design("neon")
+    assert view._reels.cards[1].design == "neon"
+
+    # Dragging the card in the preview moves it; undo puts it back.
+    moved = dataclasses.replace(view._reels.cards[0], x_fraction=0.3, y_fraction=0.6, rotation_degrees=-8)
+    view._on_element_edited("reels_card", 0, moved, False)
+    view._on_element_edited("reels_card", 0, moved, True)
+    assert view._reels.cards[0] == moved
+    view._on_undo()
+    assert view._reels.cards[0].x_fraction != 0.3
+    view._on_redo()
+    assert view._reels.cards[0] == moved
+
+    # Picture insert: the file is copied into the project.
+    photo = tmp_path / "product.png"
+    Image.new("RGB", (600, 400), (200, 30, 80)).save(photo)
+    view._reels_tabs.show_tab("Intarpai")
+    view._on_reels_insert_file_chosen(str(photo))
+    root.update()
+    insert = view._reels.inserts[0]
+    assert insert.kind == "image" and insert.aspect_ratio == pytest.approx(1.5)
+    assert insert.path != str(photo) and str(view._current_project.media_dir) in insert.path
+    assert view._track_timeline._bars["reels_inserts"]
+    assert view._selection == ("reels_insert", 0)
+
+    # Picking a card on the timeline opens its tab and selects it.
+    view._on_track_selection_changed(("reels_cards", 0))
+    root.update()
+    assert view._reels_tabs.current == "Kortelės" and cards.selected == 0
+    assert view._reels_inserts_panel.selected is None
+
+    # The Delete key in the preview removes the selected insert.
+    view._on_element_delete_requested("reels_insert", 0)
+    assert view._reels.inserts == ()
+    view._on_undo()
+    assert len(view._reels.inserts) == 1
+
+    view._save_overlays_now()
+    reopened = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    reopened._open_project(view._current_project.project_id)
+    assert reopened._reels == view._reels
+    assert reopened._reels_cards_panel._items == view._reels.cards
+    assert reopened._reels_inserts_panel._items == view._reels.inserts
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_export_burns_in_a_card(root, tmp_path):
+    view = _reels_view(root, tmp_path, seconds=3)
+    view._on_preview_seek(0.0)
+    view._reels_cards_panel._add_card("JARVIS")
+    view._on_export_clicked("720p")
+    _drain_until(view, lambda: view._cancel_event is None and view._export_panel._last_result is not None)
+    result = view._export_panel._last_result
+    frame_path = tmp_path / "frame.png"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", "1.5", "-i", str(result.output_path),
+                    "-frames:v", "1", str(frame_path)], check=True)
+    with Image.open(frame_path) as frame:
+        top = frame.convert("RGB").crop((0, 80, 720, 280))
+    plain = Image.new("RGB", top.size, (0x33, 0x55, 0x77))
+    assert ImageChops.difference(top, plain).convert("L").point(lambda v: 255 if v > 80 else 0).getbbox()

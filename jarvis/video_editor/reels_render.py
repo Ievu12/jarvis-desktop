@@ -19,7 +19,7 @@ from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from jarvis.video_editor import text_render
+from jarvis.video_editor import reels_elements, reels_media, text_render
 from jarvis.video_editor.reels import (
     REELS_CANVAS_WIDTH,
     Phrase,
@@ -309,6 +309,14 @@ def plan(layers: ReelsLayers | None, *, t: float, frame_width: int, frame_height
     if layers is None:
         return ()
     ops: list = []
+    for insert in layers.inserts:
+        op = reels_elements.plan_insert(insert, t, frame_width, frame_height, scale)
+        if op is not None:
+            ops.append(op)
+    for card in layers.cards:
+        op = reels_elements.plan_card(card, t, frame_width, frame_height, scale)
+        if op is not None:
+            ops.append(op)
     captions = layers.captions
     if captions is not None and captions.visible and captions.words:
         ops.extend(_caption_ops(captions, t, frame_width, frame_height, scale))
@@ -371,9 +379,33 @@ def _paste_center(layer: Image.Image, image: Image.Image, center_x: float, cente
     layer.alpha_composite(image.crop((left, top, right, bottom)), (x + left, y + top))
 
 
-def paint(layer: Image.Image, ops: tuple) -> None:
-    """Draws a plan() onto the RGBA `layer`."""
+def _paste_transformed(layer: Image.Image, image: Image.Image, op) -> None:
+    """Pastes an element image centered at (op.center_x, op.center_y),
+    scaled, rotated (clockwise) and faded as `op` says."""
+    if abs(op.scale - 1.0) > 0.005:
+        image = image.resize(
+            (max(1, round(image.width * op.scale)), max(1, round(image.height * op.scale))), Image.Resampling.BICUBIC,
+        )
+    if op.rotation % 360:
+        image = image.rotate(-op.rotation, expand=True, resample=Image.Resampling.BICUBIC)
+    _paste_center(layer, _with_alpha(image, op.alpha), op.center_x, op.center_y)
+
+
+def paint(layer: Image.Image, ops: tuple, *, frames: reels_media.VideoFrames | None = None) -> None:
+    """Draws a plan() onto the RGBA `layer`. Video inserts take their
+    frames from `frames` (the preview's shared decoders by default)."""
+    frames = frames or reels_media.DEFAULT_FRAMES
     for op in ops:
+        if isinstance(op, reels_elements.InsertOp):
+            if op.alpha > 0 and op.scale > 0.01:
+                image = reels_elements.insert_image(op, frames)
+                if image is not None:
+                    _paste_transformed(layer, image, op)
+            continue
+        if isinstance(op, reels_elements.CardOp):
+            if op.alpha > 0 and op.scale > 0.01:
+                _paste_transformed(layer, reels_elements.card_image(op), op)
+            continue
         if isinstance(op, RectOp):
             if op.x1 <= op.x0 or op.y1 <= op.y0 or op.color[3] == 0:
                 continue
@@ -395,15 +427,60 @@ def paint(layer: Image.Image, ops: tuple) -> None:
             _paste_center(layer, _with_alpha(block, op.alpha), op.center_x, op.center_y)
 
 
-def draw(layer: Image.Image, layers: ReelsLayers | None, *, t: float, scale: float) -> None:
+def draw(
+    layer: Image.Image, layers: ReelsLayers | None, *, t: float, scale: float,
+    frames: reels_media.VideoFrames | None = None,
+) -> None:
     """plan() + paint() onto `layer` (whose size is the frame size)."""
-    paint(layer, plan(layers, t=t, frame_width=layer.width, frame_height=layer.height, scale=scale))
+    paint(layer, plan(layers, t=t, frame_width=layer.width, frame_height=layer.height, scale=scale), frames=frames)
 
 
-def render_frame(layers: ReelsLayers | None, *, t: float, width: int, height: int, scale: float) -> Image.Image:
+def render_frame(
+    layers: ReelsLayers | None, *, t: float, width: int, height: int, scale: float,
+    frames: reels_media.VideoFrames | None = None,
+) -> Image.Image:
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw(layer, layers, t=t, scale=scale)
+    draw(layer, layers, t=t, scale=scale, frames=frames)
     return layer
+
+
+@dataclass(frozen=True)
+class ElementPlace:
+    """A card's or insert's resting place in frame pixels (animation
+    ignored), for selecting and dragging it in the preview."""
+
+    kind: str
+    """"reels_card" or "reels_insert"."""
+    index: int
+    center_x: float
+    center_y: float
+    width: float
+    height: float
+    rotation_degrees: float
+
+
+def element_places(
+    layers: ReelsLayers | None, *, t: float, frame_width: int, frame_height: int, scale: float,
+) -> list[ElementPlace]:
+    """Inserts then cards visible at `t`, bottom-most first."""
+    if layers is None:
+        return []
+    places: list[ElementPlace] = []
+    for index, insert in enumerate(layers.inserts):
+        if insert.start_seconds <= t < insert.end_seconds:
+            width, height = reels_elements.insert_size(insert, frame_width)
+            places.append(ElementPlace(
+                "reels_insert", index, insert.x_fraction * frame_width, insert.y_fraction * frame_height,
+                width, height, insert.rotation_degrees,
+            ))
+    for index, card in enumerate(layers.cards):
+        if card.start_seconds <= t < card.end_seconds:
+            width, height = reels_elements.card_size(card, scale * card.scale)
+            places.append(ElementPlace(
+                "reels_card", index, card.x_fraction * frame_width, card.y_fraction * frame_height,
+                width, height, card.rotation_degrees,
+            ))
+    return places
 
 
 def caption_box(

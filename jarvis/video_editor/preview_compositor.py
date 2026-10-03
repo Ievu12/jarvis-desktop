@@ -45,7 +45,7 @@ from jarvis.video_editor.stickers import (
 )
 from jarvis.video_editor.text_overlay import TextOverlay
 
-ElementKind = Literal["text", "sticker", "reels_caption"]
+ElementKind = Literal["text", "sticker", "reels_caption", "reels_card", "reels_insert"]
 
 
 @dataclass(frozen=True)
@@ -430,9 +430,16 @@ def element_boxes(scene: Scene, *, t: float, frame_width: int, frame_height: int
             rotation_degrees=sticker.rotation_degrees,
         ))
 
+    reels_scale = reels_render.scale_for(frame_width, frame_height)
+    for place in reels_render.element_places(
+        scene.reels, t=t, frame_width=frame_width, frame_height=frame_height, scale=reels_scale,
+    ):
+        boxes.append(ElementBox(
+            kind=place.kind, index=place.index, center_x=place.center_x, center_y=place.center_y,
+            width=place.width, height=place.height, rotation_degrees=place.rotation_degrees,
+        ))
     caption = reels_render.caption_box(
-        scene.reels, t=t, frame_width=frame_width, frame_height=frame_height,
-        scale=reels_render.scale_for(frame_width, frame_height),
+        scene.reels, t=t, frame_width=frame_width, frame_height=frame_height, scale=reels_scale,
     )
     if caption is not None:
         boxes.append(ElementBox(
