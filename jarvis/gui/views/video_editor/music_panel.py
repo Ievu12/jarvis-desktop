@@ -57,14 +57,14 @@ class MusicPanel(ctk.CTkFrame):
         self._inner.pack(fill="x", padx=theme.SPACE_MD, pady=theme.SPACE_MD)
 
         ctk.CTkLabel(
-            self._inner, text="🎵 MUSIC",
+            self._inner, text="🎵 MUZIKA",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
             text_color=theme.ACCENT_PRIMARY, anchor="w",
         ).pack(anchor="w", pady=(0, theme.SPACE_SM))
 
         self._upload_row = ctk.CTkFrame(self._inner, fg_color="transparent")
         self._upload_row.pack(fill="x")
-        ctk.CTkButton(self._upload_row, text="➕ Add Music", command=self._on_add_clicked, width=140).pack(side="left")
+        ctk.CTkButton(self._upload_row, text="➕ Įkelti muziką", command=self._on_add_clicked, width=140).pack(side="left")
 
         self._controls_container = ctk.CTkFrame(self._inner, fg_color="transparent")
 
@@ -73,10 +73,13 @@ class MusicPanel(ctk.CTkFrame):
         if path:
             self._on_file_chosen(Path(path))
 
-    def set_imported_track(self, track_path: Path, *, duration_seconds: float | None) -> None:
+    def set_imported_track(
+        self, track_path: Path, *, duration_seconds: float | None, track: MusicTrack | None = None,
+    ) -> None:
         """Called by the owning dashboard once the chosen file has been
         copied into the project and probed - renders the real
-        trim/volume/fade controls for it."""
+        trim/volume/fade controls for it. `track` pre-fills them with a
+        saved project's own settings instead of the defaults."""
         self._track_path = track_path
         for child in self._controls_container.winfo_children():
             child.destroy()
@@ -91,25 +94,25 @@ class MusicPanel(ctk.CTkFrame):
         row1 = ctk.CTkFrame(self._controls_container, fg_color="transparent")
         row1.pack(fill="x", pady=(0, theme.SPACE_XS))
         start_entry = ctk.CTkEntry(row1, width=70)
-        start_entry.insert(0, "0.0")
-        ctk.CTkLabel(row1, text="Start (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        start_entry.insert(0, f"{track.trim_start_seconds:g}" if track else "0.0")
+        ctk.CTkLabel(row1, text="Pradžia (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         start_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         volume_entry = ctk.CTkEntry(row1, width=60)
-        volume_entry.insert(0, "1.0")
-        ctk.CTkLabel(row1, text="Volume:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        volume_entry.insert(0, f"{track.volume:g}" if track else "1.0")
+        ctk.CTkLabel(row1, text="Garsumas (x):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         volume_entry.pack(side="left")
 
         row2 = ctk.CTkFrame(self._controls_container, fg_color="transparent")
         row2.pack(fill="x", pady=(0, theme.SPACE_XS))
         fade_in_entry = ctk.CTkEntry(row2, width=60)
-        fade_in_entry.insert(0, "1.0")
-        ctk.CTkLabel(row2, text="Fade in (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        fade_in_entry.insert(0, f"{track.fade_in_seconds:g}" if track else "1.0")
+        ctk.CTkLabel(row2, text="Atsiradimas (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         fade_in_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         fade_out_entry = ctk.CTkEntry(row2, width=60)
-        fade_out_entry.insert(0, "1.0")
-        ctk.CTkLabel(row2, text="Fade out (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        fade_out_entry.insert(0, f"{track.fade_out_seconds:g}" if track else "1.0")
+        ctk.CTkLabel(row2, text="Išnykimas (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         fade_out_entry.pack(side="left")
 
         error_label = status_label(self._controls_container, "", kind="error")
@@ -122,18 +125,19 @@ class MusicPanel(ctk.CTkFrame):
                 fade_out = float(fade_out_entry.get())
             except ValueError:
                 return
-            track = MusicTrack(
+            new_track = MusicTrack(
                 source_path=track_path, trim_start_seconds=start, volume=volume,
                 fade_in_seconds=fade_in, fade_out_seconds=fade_out,
+                trim_end_seconds=track.trim_end_seconds if track else None,
             )
-            problems = validate_music_track(track)
+            problems = validate_music_track(new_track)
             if problems:
                 error_label.configure(text=f"⚠️ {problems[0]}")
                 error_label.pack(anchor="w", pady=(theme.SPACE_XS, 0))
                 self._on_track_changed(None)
                 return
             error_label.pack_forget()
-            self._on_track_changed(track)
+            self._on_track_changed(new_track)
 
         for entry in (start_entry, volume_entry, fade_in_entry, fade_out_entry):
             entry.bind("<FocusOut>", on_change)
@@ -142,12 +146,35 @@ class MusicPanel(ctk.CTkFrame):
         buttons_row = ctk.CTkFrame(self._controls_container, fg_color="transparent")
         buttons_row.pack(anchor="w", pady=(theme.SPACE_XS, 0))
         ctk.CTkButton(
-            buttons_row, text="🗑 Remove Music", command=self._on_remove_clicked, width=130, height=24,
+            buttons_row, text="🗑 Pašalinti", command=self._on_remove_clicked, width=130, height=24,
             fg_color=theme.BG_CARD, hover_color=theme.DANGER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(side="left", padx=(0, theme.SPACE_SM))
+        unmuted = {"volume": volume_entry.get() if volume_entry.get() not in ("0", "0.0") else "1.0"}
+
+        def toggle_mute() -> None:
+            current = volume_entry.get().strip()
+            volume_entry.delete(0, "end")
+            if current in ("0", "0.0", "0.00"):
+                volume_entry.insert(0, unmuted["volume"])
+            else:
+                unmuted["volume"] = current or "1.0"
+                volume_entry.insert(0, "0")
+            set_mute_text()
+            on_change()
+
+        def set_mute_text() -> None:
+            muted = volume_entry.get().strip() in ("0", "0.0", "0.00")
+            self.mute_button.configure(text="🔊 Įjungti" if muted else "🔇 Nutildyti")
+
+        self.mute_button = ctk.CTkButton(
+            buttons_row, text="", command=toggle_mute, width=110, height=24,
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        )
+        self.mute_button.pack(side="left", padx=(0, theme.SPACE_SM))
+        set_mute_text()
         if self._on_analyze_rhythm_requested is not None:
             ctk.CTkButton(
-                buttons_row, text="🎵 Analyze Rhythm (approximate)", height=24,
+                buttons_row, text="🎵 Ritmo analizė", height=24,
                 command=lambda: self._on_analyze_rhythm_requested(track_path),
             ).pack(side="left")
 
@@ -205,8 +232,13 @@ class MusicPanel(ctk.CTkFrame):
             ).pack(anchor="w")
 
     def _on_remove_clicked(self) -> None:
+        self.clear_track()
+        self._on_track_changed(None)
+
+    def clear_track(self) -> None:
+        """No track shown, without emitting - used when another project
+        (with no music) is opened."""
         self._track_path = None
         for child in self._controls_container.winfo_children():
             child.destroy()
         self._controls_container.pack_forget()
-        self._on_track_changed(None)

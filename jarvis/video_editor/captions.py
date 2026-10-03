@@ -32,6 +32,8 @@ word-by-word reveal genuinely needs `drawtext`'s own per-clause
 
 from __future__ import annotations
 
+import dataclasses
+
 import json
 import os
 import subprocess
@@ -260,6 +262,8 @@ class CaptionStyle:
     shadow_color: str = "black@0.6"
     shadow_offset: int = 0
     background: bool = True
+    font: str = "arial_bold"
+    """A jarvis.video_editor.text_render.FONT_CHOICES key."""
     # outline_width=0/shadow_offset=0 are each independently "off" -
     # requirement: "šriftą, dydį, spalvą, kontūrą, šešėlį ir foną"
     # (font, size, color, outline, shadow and background) - `background`
@@ -267,6 +271,30 @@ class CaptionStyle:
     # already applies, kept as a real on/off switch rather than a new
     # mechanism (some styles want a clean outline/shadow look with no
     # box at all).
+
+
+CAPTION_STYLE_PRESETS: dict[str, dict] = {
+    "Klasikinis": {},
+    "Kontūras": {"outline_width": 4, "background": False},
+    "Geltonas": {"color": "#FFD700", "highlight_color": "white", "outline_width": 3, "background": False},
+    "TikTok": {"font": "impact", "outline_width": 5, "background": False, "highlight_color": "#FF3B6B"},
+    "Šešėlis": {"outline_width": 0, "shadow_offset": 4, "background": False},
+    "Elegantiškas": {"font": "georgia", "outline_width": 0, "shadow_offset": 3, "shadow_color": "black@0.5",
+                     "background": False},
+}
+# Subtitle looks (requirement: "subtitrų stiliai"). Each one starts from
+# the default look, so applying one never keeps leftovers of another;
+# size, position and animation stay the person's own.
+_CAPTION_LOOK_FIELDS = (
+    "font", "color", "highlight_color", "outline_color", "outline_width", "shadow_color", "shadow_offset", "background",
+)
+
+
+def apply_caption_preset(style: CaptionStyle, name: str) -> CaptionStyle:
+    baseline = CaptionStyle()
+    changes = {field: getattr(baseline, field) for field in _CAPTION_LOOK_FIELDS}
+    changes.update(CAPTION_STYLE_PRESETS[name])
+    return dataclasses.replace(style, **changes)
 
 
 def generate_word_timings(source_path: Path, *, language: str = DEFAULT_CAPTION_LANGUAGE) -> list[WordTiming]:
@@ -420,6 +448,14 @@ def _escape_drawtext_text(text: str) -> str:
     return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
+def caption_font_file(style: CaptionStyle) -> str:
+    """The font file `style` uses (the default font when its font isn't
+    installed)."""
+    from jarvis.video_editor.text_render import resolve_font_file
+
+    return resolve_font_file(style.font, _DEFAULT_FONT_FILE)
+
+
 def _style_suffix(style: CaptionStyle) -> str:
     """Builds the shared outline/shadow/background drawtext option
     suffix from `style` - factored out of build_caption_filter()/
@@ -439,9 +475,21 @@ def _style_suffix(style: CaptionStyle) -> str:
     return (":" + ":".join(parts)) if parts else ""
 
 
+def scale_caption_style(style: CaptionStyle, scale: float) -> CaptionStyle:
+    """`style` with its pixel sizes (font, outline, shadow) multiplied
+    by `scale` - see jarvis.video_editor.text_overlay.text_scale_for():
+    caption sizes are 1080p pixels, scaled per export resolution."""
+    if scale == 1.0:
+        return style
+    return dataclasses.replace(
+        style, font_size=max(1, round(style.font_size * scale)),
+        outline_width=round(style.outline_width * scale), shadow_offset=round(style.shadow_offset * scale),
+    )
+
+
 def build_caption_filter(
     words: list[WordTiming], style: CaptionStyle, *, time_offset_seconds: float = 0.0,
-    video_label: str = "outv", output_label: str = "capv",
+    video_label: str = "outv", output_label: str = "capv", scale: float = 1.0,
 ) -> str:
     """Builds the ffmpeg filter clause(s) compositing `words` as burned-
     in captions on top of `[{video_label}]` (the already-assembled
@@ -473,6 +521,7 @@ def build_caption_filter(
     duration), just without per-word reveal."""
     if not words:
         return f"[{video_label}]null[{output_label}]"
+    style = scale_caption_style(style, scale)
 
     if style.animation == "karaoke":
         word_groups = _group_words_by_gap(words)
@@ -485,7 +534,7 @@ def build_caption_filter(
     font_color = style.highlight_color if style.animation == "word_by_word" else style.color
     style_suffix = _style_suffix(style)
 
-    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    font_file_arg = _escape_drawtext_text(caption_font_file(style))
 
     clauses: list[str] = []
     if style.animation == "none":
@@ -573,15 +622,15 @@ def _build_karaoke_filter(
     CaptionAnimation's own docstring for why this needs TWO stacked
     drawtext clauses per word rather than a single color-expression
     clause."""
-    from PIL import ImageFont
+    from jarvis.video_editor.text_render import load_font
 
     if not word_groups:
         return f"[{video_label}]null[{output_label}]"
 
     y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
-    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    font_file_arg = _escape_drawtext_text(caption_font_file(style))
     style_suffix = _style_suffix(style)
-    font = ImageFont.truetype(_DEFAULT_FONT_FILE, style.font_size)
+    font = load_font(caption_font_file(style), style.font_size)
     space_width = font.getlength(" ")
 
     clauses: list[str] = []
@@ -613,7 +662,7 @@ def _build_karaoke_filter(
 
 def build_caption_filter_from_lines(
     lines: list[CaptionLine], style: CaptionStyle, *, time_offset_seconds: float = 0.0,
-    video_label: str = "outv", output_label: str = "capv",
+    video_label: str = "outv", output_label: str = "capv", scale: float = 1.0,
 ) -> str:
     """Builds the same drawtext-overlay filter clause as
     build_caption_filter(), but from person-EDITED CaptionLines rather
@@ -636,9 +685,10 @@ def build_caption_filter_from_lines(
 
     if not lines:
         return f"[{video_label}]null[{output_label}]"
+    style = scale_caption_style(style, scale)
 
     y_expr = _POSITION_Y_EXPR.get(style.position, _POSITION_Y_EXPR["bottom"])
-    font_file_arg = _escape_drawtext_text(_DEFAULT_FONT_FILE)
+    font_file_arg = _escape_drawtext_text(caption_font_file(style))
     style_suffix = _style_suffix(style)
 
     clauses: list[str] = []
@@ -689,3 +739,61 @@ def _srt_timestamp(seconds: float) -> str:
     minutes, rem = divmod(rem, 60_000)
     secs, ms = divmod(rem, 1000)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+
+_SRT_TIME = r"(\d{1,2}):(\d{2}):(\d{2})(?:[,.](\d{1,3}))?"
+
+
+def parse_srt(text: str) -> list[CaptionLine]:
+    """Reads SubRip subtitles (the person's own .srt, or one written by
+    export_srt()) into CaptionLines, in time order. Tolerant of what
+    hand-made and other programs' SRT files contain: missing index
+    lines, "." instead of "," before the milliseconds, Windows line
+    ends, a BOM, several text lines per cue (joined with a space) and
+    simple <i>/<b>/<font> tags (removed). Cues without text or with an
+    end before their start are skipped, never raised."""
+    import re
+
+    pattern = re.compile(rf"{_SRT_TIME}\s*-->\s*{_SRT_TIME}")
+
+    def seconds(h, m, s, ms) -> float:
+        return int(h) * 3600 + int(m) * 60 + int(s) + (int((ms or "0").ljust(3, "0")) / 1000)
+
+    lines: list[CaptionLine] = []
+    blocks = re.split(r"\n\s*\n", text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n"))
+    for block in blocks:
+        rows = [row.strip() for row in block.strip().split("\n") if row.strip()]
+        for n, row in enumerate(rows):
+            match = pattern.search(row)
+            if match is None:
+                continue
+            start = seconds(*match.groups()[:4])
+            end = seconds(*match.groups()[4:])
+            caption = re.sub(r"<[^>]+>|\{\\[^}]*\}", "", " ".join(rows[n + 1:])).strip()
+            if caption and end > start:
+                lines.append(CaptionLine(text=caption, start_seconds=round(start, 3), end_seconds=round(end, 3)))
+            break
+    return sorted(lines, key=lambda line: line.start_seconds)
+
+
+def import_srt(path: Path) -> list[CaptionLine]:
+    """parse_srt() of a file. UTF-8 first (with or without BOM), then
+    Windows-1257 (Baltic) and Windows-1252, so older Lithuanian SRT files
+    keep their ą č ę ė į š ų ū ž. Raises CaptionError when the file
+    can't be read or holds no subtitles."""
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        raise CaptionError(f"Nepavyko atidaryti failo: {e}") from e
+    for encoding in ("utf-8-sig", "utf-16", "cp1257", "cp1252"):
+        if encoding == "utf-16" and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            continue
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        lines = parse_srt(text)
+        if lines:
+            return lines
+        break
+    raise CaptionError(f"Faile {path.name} nerasta subtitrų (SRT formatas).")

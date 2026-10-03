@@ -1,0 +1,603 @@
+"""Settings panel for whichever text or sticker is selected in the
+interactive preview, or clip/photo selected on the track timeline
+(right of the video window). Every control applies
+immediately: sliders and typing update the preview on each change, and
+the edit is committed (saved, synced into the Text/Stickers panels)
+once the person stops for a moment.
+
+Like every Video Editor panel it owns no state of its own - it shows
+the element the dashboard gives it and reports edits back through
+`on_element_edited(kind, index, new_element, final)`."""
+
+from __future__ import annotations
+
+import dataclasses
+from typing import Callable
+
+import customtkinter as ctk
+
+from jarvis.gui import theme
+from jarvis.gui.views.video_editor.common import LabeledDropdown
+from jarvis.gui.widgets import Card
+from jarvis.video_editor.effects import LOOK_CHOICES, LOOK_LABELS
+from jarvis.video_editor import animation_catalog as catalog
+from jarvis.video_editor.stickers import StickerInstance
+from jarvis.video_editor.text_render import FONT_CHOICES, FONT_LABELS, font_is_available
+from jarvis.video_editor.text_templates import TEXT_STYLE_PRESETS, apply_text_style
+from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TextOverlay
+from jarvis.video_editor.timeline import MAX_CLIP_VOLUME, TRANSITION_KIND_CHOICES, TimelineClip, TimelineStill, TransitionSpec
+from jarvis.video_editor.track_layout import MIN_TRANSITION_SECONDS, TRANSITION_LABELS
+
+_COMMIT_DELAY_MS = 500
+_SWATCHES = ("white", "black", "#FFD700", "#FF6B9D", "#7FDBFF", "#B8F2A0", "#C9A7FF", "#FF7A45")
+
+
+class ElementInspectorPanel(ctk.CTkFrame):
+    def __init__(
+        self, master, *,
+        on_element_edited: Callable[[str, int, object, bool], None],
+        on_delete_requested: Callable[[str, int], None],
+        on_duplicate_requested: Callable[[str, int], None],
+        on_layer_requested: Callable[[str, int, int], None] | None = None,
+        **kwargs,
+    ) -> None:
+        """`on_layer_requested(kind, index, delta)` moves a text or
+        sticker one layer up (+1, drawn later, on top) or down (-1)."""
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self._on_layer_requested = on_layer_requested
+        self._on_element_edited = on_element_edited
+        self._on_delete_requested = on_delete_requested
+        self._on_duplicate_requested = on_duplicate_requested
+        self._kind: str | None = None
+        self._index = -1
+        self._element: TextOverlay | StickerInstance | None = None
+        self._commit_after_id: str | None = None
+        self._refreshing = False
+        self._value_setters: list[Callable[[object], None]] = []
+        self._max_transition: float | None = None
+
+        card = Card(self)
+        card.pack(fill="both", expand=True)
+        self._inner = ctk.CTkFrame(card, fg_color="transparent")
+        self._inner.pack(fill="both", expand=True, padx=theme.SPACE_MD, pady=theme.SPACE_MD)
+        ctk.CTkLabel(
+            self._inner, text="⚙️ NUSTATYMAI",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
+            text_color=theme.ACCENT_PRIMARY, anchor="w",
+        ).pack(anchor="w", pady=(0, theme.SPACE_SM))
+        self._body = ctk.CTkFrame(self._inner, fg_color="transparent")
+        self._body.pack(fill="both", expand=True)
+        self.show_nothing()
+
+    # --- dashboard-facing API ----------------------------------------------------------------
+
+    @property
+    def shown(self) -> tuple[str, int] | None:
+        return (self._kind, self._index) if self._kind is not None else None
+
+    def show_nothing(self) -> None:
+        self._flush_commit()
+        self._kind, self._index, self._element = None, -1, None
+        self._clear_body()
+        ctk.CTkLabel(
+            self._body, text="Paspauskite tekstą ar lipduką peržiūros lange arba bet kurį elementą laiko juostoje - čia atsiras jo nustatymai.",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
+        ).pack(anchor="w")
+
+    def show_element(
+        self, kind: str, index: int, element: TextOverlay | StickerInstance | TimelineClip | TimelineStill,
+        *, title: str = "", max_transition: float | None = None,
+    ) -> None:
+        """`kind` is "text", "sticker" or "clip" (a video clip or photo
+        on the timeline, `title` being its file name, `max_transition`
+        the longest transition into the next clip it allows - None for
+        the last clip, which has no next one)."""
+        if (
+            (kind, index) == (self._kind, self._index) and type(element) is type(self._element)
+            and max_transition == self._max_transition
+        ):
+            self.refresh_values(element)
+            return
+        self._flush_commit()
+        self._kind, self._index, self._element = kind, index, element
+        self._max_transition = max_transition
+        self._clear_body()
+        if isinstance(element, TextOverlay):
+            self._build_text_controls(element)
+        elif isinstance(element, StickerInstance):
+            self._build_sticker_controls(element)
+        else:
+            self._build_clip_controls(element, title)
+
+    def refresh_values(self, element: TextOverlay | StickerInstance) -> None:
+        """Updates the shown values after an edit made elsewhere (e.g.
+        dragging in the preview) without firing any callback."""
+        self._element = element
+        self._refreshing = True
+        try:
+            for setter in self._value_setters:
+                setter(element)
+        finally:
+            self._refreshing = False
+
+    # --- building --------------------------------------------------------------------------
+
+    def _clear_body(self) -> None:
+        self._value_setters = []
+        for child in self._body.winfo_children():
+            child.destroy()
+
+    def _label(self, text: str) -> None:
+        ctk.CTkLabel(
+            self._body, text=text, font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_SECONDARY, anchor="w",
+        ).pack(anchor="w", pady=(theme.SPACE_SM, 0))
+
+    def _slider(
+        self, label: str, field: str, low: float, high: float, *, steps: int, fmt: str, cast=float,
+        get: Callable[[object], float] | None = None, changes: Callable[[float], dict] | None = None,
+    ) -> ctk.CTkSlider:
+        """A slider for `field`, or for any value `get` reads from the
+        element and `changes(value)` turns into dataclass changes."""
+        get = get or (lambda element: getattr(element, field))
+        changes = changes or (lambda value: {field: value})
+        self._label(label)
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x")
+        value_label = ctk.CTkLabel(row, text="", width=48, anchor="e",
+                                   font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION))
+
+        def on_move(value: float) -> None:
+            value_label.configure(text=fmt.format(cast(value)))
+            if not self._refreshing:
+                self._edit(**changes(cast(value)))
+
+        slider = ctk.CTkSlider(row, from_=low, to=high, number_of_steps=steps, command=on_move, width=180)
+        slider.pack(side="left", fill="x", expand=True)
+        value_label.pack(side="left", padx=(theme.SPACE_XS, 0))
+
+        def set_value(element) -> None:
+            value = get(element)
+            slider.set(max(low, min(high, value)))
+            value_label.configure(text=fmt.format(value))
+
+        set_value(self._element)
+        self._value_setters.append(set_value)
+        return slider
+
+    def _entry(self, parent, field: str, *, width: int, parse, fmt=str, live: bool = False) -> ctk.CTkEntry:
+        entry = ctk.CTkEntry(parent, width=width)
+
+        def on_change(_event=None, *, final: bool = True) -> None:
+            try:
+                value = parse(entry.get())
+            except ValueError:
+                return
+            if value != getattr(self._element, field):
+                self._edit(final=final, **{field: value})
+
+        entry.bind("<Return>", on_change)
+        entry.bind("<FocusOut>", on_change)
+        if live:
+            entry.bind("<KeyRelease>", lambda e: on_change(e, final=False))
+
+        def set_value(element) -> None:
+            text = fmt(getattr(element, field))
+            if entry.get() != text and entry.focus_get() is not entry:
+                entry.delete(0, "end")
+                entry.insert(0, text)
+
+        set_value(self._element)
+        self._value_setters.append(set_value)
+        return entry
+
+    def _timing_row(self) -> None:
+        self._label("Rodoma (s): nuo - iki")
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x")
+        self._entry(row, "start_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+        ctk.CTkLabel(row, text=" - ").pack(side="left")
+        self._entry(row, "end_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+
+    def _animation_controls(self, kind: str) -> None:
+        """A category dropdown (entrance, exit, motion, scale, fade,
+        bounce, slide) narrowing the animation dropdown under it."""
+        category_labels = tuple(catalog.CATEGORY_LABELS[c] for c in catalog.ANIMATION_CATEGORIES)
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(theme.SPACE_SM, 0))
+        category = LabeledDropdown(row, "Animacijų grupė:", category_labels)
+        category.pack(fill="x")
+        animation = LabeledDropdown(row, "Animacija:", (catalog.animation_label(kind, "none"),))
+        animation.pack(fill="x", pady=(theme.SPACE_XS, 0))
+
+        def fill_animations(category_key: str) -> None:
+            labels = [catalog.animation_label(kind, a) for a in catalog.animations_in(kind, category_key)]
+            animation.dropdown.configure(values=labels)
+
+        def on_category(label: str) -> None:
+            fill_animations(catalog.ANIMATION_CATEGORIES[category_labels.index(label)])
+
+        def on_pick(label: str) -> None:
+            if self._refreshing:
+                return
+            value = catalog.animation_from_label(kind, label)
+            changes = {"animation": value}
+            # Rotation only exports with a plain/fade text animation (see
+            # text_overlay.ROTATABLE_TEXT_ANIMATIONS) - picking another
+            # one straightens the text rather than making it invalid.
+            if isinstance(self._element, TextOverlay) and value not in ROTATABLE_TEXT_ANIMATIONS:
+                changes["rotation_degrees"] = 0.0
+            self._edit(final=True, **changes)
+
+        category.dropdown.configure(command=on_category)
+        animation.dropdown.configure(command=on_pick)
+
+        def set_value(element) -> None:
+            current = element.animation
+            shown = catalog.ANIMATION_CATEGORIES[category_labels.index(category.get())]
+            if current not in catalog.animations_in(kind, shown):
+                shown = catalog.category_of(kind, current)
+                category.set(catalog.CATEGORY_LABELS[shown])
+            fill_animations(shown)
+            animation.set(catalog.animation_label(kind, current))
+
+        category.set(catalog.CATEGORY_LABELS[catalog.category_of(kind, self._element.animation)])
+        set_value(self._element)
+        self._value_setters.append(set_value)
+
+    def _text_animation_settings(self) -> None:
+        self._slider("Animacijos greitis (x)", "speed", 0.25, 4.0, steps=75, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        self._slider("Animacijos stiprumas", "intensity", 0.1, 3.0, steps=29, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        self._slider("Išblukimo trukmė (s)", "fade_seconds", 0.1, 3.0, steps=29, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        labels = {"left": "Iš kairės", "right": "Iš dešinės"}
+        direction = LabeledDropdown(self._body, "Slinkimo kryptis:", tuple(labels.values()))
+        direction.pack(fill="x", pady=(theme.SPACE_SM, 0))
+
+        def on_pick(label: str) -> None:
+            if not self._refreshing:
+                self._edit(final=True, direction=next(k for k, v in labels.items() if v == label))
+
+        direction.dropdown.configure(command=on_pick)
+        set_direction = lambda element: direction.set(labels.get(element.direction, labels["left"]))  # noqa: E731
+        set_direction(self._element)
+        self._value_setters.append(set_direction)
+        ctk.CTkLabel(
+            self._body, text="Animacija prasideda ir baigiasi kartu su elementu: keiskite laiką žemiau arba "
+                             "tempdami kraštus laiko juostoje.",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=190, justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
+    def _layer_buttons(self) -> None:
+        if self._on_layer_requested is None:
+            return
+        self._label("Sluoksnis")
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x")
+        style = dict(fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
+                     border_color=theme.BORDER_SUBTLE, height=28)
+        ctk.CTkButton(row, text="⬆ Į priekį", width=100, command=lambda: self._move_layer(+1), **style).pack(
+            side="left", padx=(0, theme.SPACE_XS),
+        )
+        ctk.CTkButton(row, text="⬇ Atgal", width=100, command=lambda: self._move_layer(-1), **style).pack(side="left")
+
+    def _move_layer(self, delta: int) -> None:
+        if self._kind is None:
+            return
+        self._flush_commit()
+        self._on_layer_requested(self._kind, self._index, delta)
+
+    def _action_buttons(self) -> None:
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(theme.SPACE_MD, 0))
+        ctk.CTkButton(
+            row, text="📋 Kopijuoti", width=100, height=28,
+            command=lambda: self._on_duplicate_requested(self._kind, self._index),
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        ).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkButton(
+            row, text="🗑 Ištrinti", width=100, height=28, command=self._on_delete_clicked,
+            fg_color=theme.BG_CARD, hover_color=theme.DANGER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        ).pack(side="left")
+
+    def _swatches(self, parent, field: str, colors: tuple[str, ...] = _SWATCHES) -> None:
+        for color in colors:
+            ctk.CTkButton(
+                parent, text="", width=18, height=18, fg_color=_swatch_hex(color), hover_color=_swatch_hex(color),
+                border_width=1, border_color=theme.BORDER_SUBTLE,
+                command=lambda c=color: self._edit(final=True, **{field: c}),
+            ).pack(side="left", padx=(0, 2))
+
+    def _style_presets(self) -> None:
+        self._label("Stilius")
+        grid = ctk.CTkFrame(self._body, fg_color="transparent")
+        grid.pack(fill="x")
+        for n, preset in enumerate(TEXT_STYLE_PRESETS):
+            ctk.CTkButton(
+                grid, text=preset.name, width=78, height=24,
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+                fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
+                border_color=theme.BORDER_SUBTLE,
+                command=lambda p=preset: self._apply_style_preset(p),
+            ).grid(row=n // 3, column=n % 3, padx=(0, 2), pady=(0, 2), sticky="w")
+
+    def _apply_style_preset(self, preset) -> None:
+        if isinstance(self._element, TextOverlay):
+            self._edit(final=True, **{
+                name: value for name, value in dataclasses.asdict(apply_text_style(self._element, preset)).items()
+                if getattr(self._element, name) != value
+            })
+
+    def _font_dropdown(self) -> None:
+        labels = tuple(FONT_LABELS[font] for font in FONT_CHOICES)
+        dropdown = LabeledDropdown(self._body, "Šriftas:", labels)
+        dropdown.pack(fill="x", pady=(theme.SPACE_SM, 0))
+        note = ctk.CTkLabel(
+            self._body, text="", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
+        )
+        note.pack(anchor="w")
+
+        def on_pick(label: str) -> None:
+            if not self._refreshing:
+                self._edit(final=True, font=FONT_CHOICES[labels.index(label)])
+
+        dropdown.dropdown.configure(command=on_pick)
+
+        def set_font(element) -> None:
+            dropdown.set(FONT_LABELS.get(element.font, labels[0]))
+            note.configure(text="" if font_is_available(element.font) else
+                           "Šio šrifto kompiuteryje nėra: naudojamas Arial Bold.")
+
+        set_font(self._element)
+        self._value_setters.append(set_font)
+
+    def _text_style_controls(self) -> None:
+        self._slider("Kontūras (px)", "outline_width", 0, 20, steps=20, fmt="{:d}", cast=lambda v: int(round(v)))
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(2, 0))
+        self._swatches(row, "outline_color")
+        self._slider("Šešėlis (px)", "shadow_offset", 0, 20, steps=20, fmt="{:d}", cast=lambda v: int(round(v)))
+        self._slider("Šešėlio ryškumas", "shadow_opacity", 0.0, 1.0, steps=20, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(2, 0))
+        self._swatches(row, "shadow_color")
+        self._slider("Fonas (permatomumas)", "background_opacity", 0.0, 1.0, steps=20, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
+        row.pack(fill="x", pady=(2, 0))
+        self._swatches(row, "background_color")
+
+    def _build_text_controls(self, overlay: TextOverlay) -> None:
+        self._label("Tekstas")
+        self._entry(self._body, "text", width=240, parse=_non_empty, live=True).pack(fill="x")
+        self._style_presets()
+        self._font_dropdown()
+        self._slider("Šrifto dydis", "font_size", 8, 300, steps=292, fmt="{:d}", cast=lambda v: int(round(v)))
+
+        self._label("Spalva")
+        color_row = ctk.CTkFrame(self._body, fg_color="transparent")
+        color_row.pack(fill="x")
+        self._entry(color_row, "color", width=90, parse=_non_empty).pack(side="left", padx=(0, theme.SPACE_XS))
+        self._swatches(color_row, "color")
+        self._text_style_controls()
+
+        rotation_slider = self._slider("Pasukimas (°)", "rotation_degrees", -180, 180, steps=360, fmt="{:.0f}")
+        rotation_note = ctk.CTkLabel(
+            self._body, text="", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
+        )
+        rotation_note.pack(anchor="w")
+
+        def set_rotation_state(element: TextOverlay) -> None:
+            rotatable = element.animation in ROTATABLE_TEXT_ANIMATIONS
+            rotation_slider.configure(state="normal" if rotatable else "disabled")
+            rotation_note.configure(text="" if rotatable else "Pasukti galima tik su „none“ arba „fade“ animacija.")
+
+        set_rotation_state(overlay)
+        self._value_setters.append(set_rotation_state)
+        self._slider("Permatomumas", "opacity", 0.0, 1.0, steps=100, fmt="{:.2f}", cast=lambda v: round(v, 2))
+        self._animation_controls("text")
+        self._text_animation_settings()
+        self._timing_row()
+        self._layer_buttons()
+        self._action_buttons()
+
+    def _build_sticker_controls(self, sticker: StickerInstance) -> None:
+        name = sticker.custom_path.name if sticker.custom_path is not None else sticker.shape
+        ctk.CTkLabel(
+            self._body, text=f"🖼️ {name}", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
+            text_color=theme.TEXT_PRIMARY, anchor="w",
+        ).pack(anchor="w")
+        self._slider("Dydis", "size_fraction", 0.02, 1.0, steps=98, fmt="{:.2f}")
+        self._slider("Pasukimas (°)", "rotation_degrees", -180, 180, steps=360, fmt="{:.0f}")
+        self._slider("Permatomumas", "opacity", 0.0, 1.0, steps=100, fmt="{:.2f}")
+        self._animation_controls("sticker")
+        self._slider("Animacijos greitis (x)", "animation_speed", 0.25, 4.0, steps=75, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        self._slider("Animacijos stiprumas", "animation_intensity", 0.0, 3.0, steps=60, fmt="{:.2f}",
+                     cast=lambda v: round(v, 2))
+        self._timing_row()
+        self._slider("Atsiradimas (s)", "fade_in_seconds", 0.0, 3.0, steps=30, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        self._slider("Dingimas (s)", "fade_out_seconds", 0.0, 3.0, steps=30, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        self._layer_buttons()
+        self._action_buttons()
+
+    def _build_clip_controls(self, item: TimelineClip | TimelineStill, title: str) -> None:
+        ctk.CTkLabel(
+            self._body, text=f"🎬 {title}" if title else "🎬 Klipas",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
+            text_color=theme.TEXT_PRIMARY, anchor="w", wraplength=240, justify="left",
+        ).pack(anchor="w")
+        if isinstance(item, TimelineStill):
+            self._slider("Trukmė (s)", "display_duration_seconds", 0.5, 30, steps=295, fmt="{:.1f}",
+                         cast=lambda v: round(v, 1))
+        else:
+            self._slider("Greitis (x)", "speed_factor", 0.25, 4.0, steps=75, fmt="{:.2f}",
+                         cast=lambda v: round(v, 2))
+            self._label("Iškarpa iš originalo (s): nuo - iki")
+            row = ctk.CTkFrame(self._body, fg_color="transparent")
+            row.pack(fill="x")
+            self._entry(row, "source_in_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+            ctk.CTkLabel(row, text=" - ").pack(side="left")
+            self._entry(row, "source_out_seconds", width=70, parse=float, fmt=lambda v: f"{v:g}").pack(side="left")
+            self._clip_sound_controls()
+        self._look_controls()
+        self._transition_controls()
+        ctk.CTkLabel(
+            self._body, text="Kraštus galite tempti ir laiko juostoje. Daugiau efektų: kairėje, 🎨 Filtrai.",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED, anchor="w", wraplength=240, justify="left",
+        ).pack(anchor="w", pady=(theme.SPACE_SM, 0))
+        self._action_buttons()
+
+    def _clip_sound_controls(self) -> None:
+        """The clip's own sound: volume, mute and fades."""
+        self._label("🔊 Klipo garsas")
+        mute_button = ctk.CTkButton(
+            self._body, text="", width=140, height=26,
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        )
+        mute_button.pack(anchor="w", pady=(2, 0))
+        self._unmuted_volume = 1.0
+
+        def toggle_mute() -> None:
+            if self._element.volume > 0:
+                self._unmuted_volume = self._element.volume
+                self._edit(final=True, volume=0.0)
+            else:
+                self._edit(final=True, volume=self._unmuted_volume or 1.0)
+            set_mute_text(self._element)
+
+        def set_mute_text(element) -> None:
+            mute_button.configure(text="🔊 Įjungti garsą" if element.volume <= 0 else "🔇 Nutildyti")
+
+        mute_button.configure(command=toggle_mute)
+        set_mute_text(self._element)
+        self._value_setters.append(set_mute_text)
+        self._slider("Garsumas (%)", "volume", 0, MAX_CLIP_VOLUME * 100, steps=40, fmt="{:.0f}",
+                     cast=lambda v: int(round(v)),
+                     get=lambda element: element.volume * 100,
+                     changes=lambda value: {"volume": round(value / 100, 2)})
+        self._slider("Garso atsiradimas (s)", "audio_fade_in_seconds", 0.0, 5.0, steps=50, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+        self._slider("Garso išnykimas (s)", "audio_fade_out_seconds", 0.0, 5.0, steps=50, fmt="{:.1f}",
+                     cast=lambda v: round(v, 1))
+
+    def _look_controls(self) -> None:
+        labels = tuple(LOOK_LABELS[look] for look in LOOK_CHOICES)
+        dropdown = LabeledDropdown(self._body, "🎨 Filtras:", labels)
+        dropdown.pack(fill="x", pady=(theme.SPACE_SM, 0))
+
+        def on_pick(label: str) -> None:
+            if self._refreshing:
+                return
+            look = LOOK_CHOICES[labels.index(label)]
+            self._edit(final=True, effect=dataclasses.replace(self._element.effect, look=look))
+
+        dropdown.dropdown.configure(command=on_pick)
+        set_label = lambda element: dropdown.set(LOOK_LABELS.get(element.effect.look, labels[0]))  # noqa: E731
+        set_label(self._element)
+        self._value_setters.append(set_label)
+        self._slider(
+            "Filtro intensyvumas (%)", "look_intensity", 0, 100, steps=20, fmt="{:.0f}",
+            cast=lambda v: int(round(v)),
+            get=lambda element: element.effect.look_intensity * 100,
+            changes=lambda value: {"effect": dataclasses.replace(self._element.effect, look_intensity=value / 100)},
+        )
+
+    def _transition_controls(self) -> None:
+        limit = self._max_transition
+        if limit is None:
+            return  # the last clip has nothing to transition into
+        labels = tuple(TRANSITION_LABELS[kind] for kind in TRANSITION_KIND_CHOICES)
+        dropdown = LabeledDropdown(self._body, "⇄ Perėjimas į kitą klipą:", labels)
+        dropdown.pack(fill="x", pady=(theme.SPACE_SM, 0))
+        if limit < MIN_TRANSITION_SECONDS:
+            dropdown.dropdown.configure(state="disabled")
+            dropdown.set(labels[0])
+            self._label("Klipai per trumpi perėjimui.")
+            return
+
+        def on_pick(label: str) -> None:
+            if self._refreshing:
+                return
+            kind = TRANSITION_KIND_CHOICES[labels.index(label)]
+            current = self._element.transition_out
+            if kind == "cut":
+                spec = TransitionSpec()
+            else:
+                duration = current.duration_seconds if current.kind != "cut" else min(0.5, limit)
+                spec = TransitionSpec(kind=kind, duration_seconds=duration)
+            self._edit(final=True, transition_out=spec)
+
+        dropdown.dropdown.configure(command=on_pick)
+        duration_slider = self._slider(
+            "Perėjimo trukmė (s)", "transition_out", MIN_TRANSITION_SECONDS, limit,
+            steps=max(1, int(round((limit - MIN_TRANSITION_SECONDS) * 10))), fmt="{:.1f}",
+            cast=lambda v: round(v, 1),
+            get=lambda element: element.transition_out.duration_seconds,
+            changes=lambda value: {"transition_out": dataclasses.replace(self._element.transition_out, duration_seconds=value)},
+        )
+
+        def set_kind(element) -> None:
+            dropdown.set(TRANSITION_LABELS.get(element.transition_out.kind, labels[0]))
+            duration_slider.configure(state="disabled" if element.transition_out.kind == "cut" else "normal")
+
+        set_kind(self._element)
+        self._value_setters.append(set_kind)
+
+    # --- editing -----------------------------------------------------------------------------
+
+    def _edit(self, *, final: bool = False, **changes) -> None:
+        if self._element is None or self._kind is None:
+            return
+        self._element = dataclasses.replace(self._element, **changes)
+        self._on_element_edited(self._kind, self._index, self._element, final)
+        if final:
+            self._cancel_commit()
+        else:
+            self._cancel_commit()
+            self._commit_after_id = self.after(_COMMIT_DELAY_MS, self._commit)
+
+    def _commit(self) -> None:
+        self._commit_after_id = None
+        if self._element is not None and self._kind is not None:
+            self._on_element_edited(self._kind, self._index, self._element, True)
+
+    def _cancel_commit(self) -> None:
+        if self._commit_after_id is not None:
+            self.after_cancel(self._commit_after_id)
+            self._commit_after_id = None
+
+    def _flush_commit(self) -> None:
+        """A pending (debounced) commit for the element being left is
+        sent now, so switching selection never drops an edit."""
+        if self._commit_after_id is not None:
+            self._cancel_commit()
+            self._commit()
+
+    def _on_delete_clicked(self) -> None:
+        if self._kind is None:
+            return
+        kind, index = self._kind, self._index
+        self._cancel_commit()
+        self._kind, self._index, self._element = None, -1, None
+        self._on_delete_requested(kind, index)
+
+
+def _non_empty(value: str) -> str:
+    if not value.strip():
+        raise ValueError("empty")
+    return value
+
+
+def _swatch_hex(color: str) -> str:
+    return {"white": "#FFFFFF", "black": "#000000"}.get(color, color)

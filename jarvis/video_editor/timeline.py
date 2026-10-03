@@ -53,6 +53,7 @@ ASPECT_RATIO_CHOICES: tuple[AspectRatio, ...] = ("9:16", "1:1", "16:9", "4:5")
 
 _MIN_SPEED_FACTOR = 0.25
 _MAX_SPEED_FACTOR = 4.0
+MAX_CLIP_VOLUME = 2.0
 # ffmpeg's own atempo filter only accepts [0.5, 2.0] per stage (chained
 # for a wider range, see multisource_export.py's own atempo-chaining
 # docstring) - this module's own sane outer bound is wider than that to
@@ -112,6 +113,11 @@ class TimelineClip:
     speed_factor: float = 1.0
     transition_out: TransitionSpec = field(default_factory=TransitionSpec)
     effect: EffectSpec = field(default_factory=EffectSpec)
+    volume: float = 1.0
+    """The clip's own sound: 1.0 unchanged, 0.0 muted, up to
+    MAX_CLIP_VOLUME (2.0) louder."""
+    audio_fade_in_seconds: float = 0.0
+    audio_fade_out_seconds: float = 0.0
 
     @property
     def source_duration_seconds(self) -> float:
@@ -205,6 +211,10 @@ class Timeline:
             if isinstance(item, TimelineClip):
                 if item.source_out_seconds <= item.source_in_seconds:
                     problems.append(f"Clip {index}: trim end must be after trim start.")
+                if not (0.0 <= item.volume <= MAX_CLIP_VOLUME):
+                    problems.append(f"Clip {index}: volume {item.volume}x is outside the supported 0x-{MAX_CLIP_VOLUME:g}x range.")
+                if item.audio_fade_in_seconds < 0.0 or item.audio_fade_out_seconds < 0.0:
+                    problems.append(f"Clip {index}: sound fade durations cannot be negative.")
                 if not (_MIN_SPEED_FACTOR <= item.speed_factor <= _MAX_SPEED_FACTOR):
                     problems.append(
                         f"Clip {index}: speed {item.speed_factor}x is outside the supported "

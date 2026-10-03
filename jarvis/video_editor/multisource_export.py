@@ -251,9 +251,7 @@ def build_filtergraph(
         # effect at all skips straight to [v{n}] via a plain relabel
         # (see the `has_effect` branch below) - never pays for an extra
         # filter stage it didn't ask for.
-        has_effect = item.effect.motion != "none" or item.effect.fade != "none" or (
-            item.effect.brightness != 0.0 or item.effect.contrast != 1.0 or item.effect.saturation != 1.0
-        )
+        has_effect = not item.effect.is_identity
         raw_label = f"vraw{n}" if has_effect else f"v{n}"
 
         if isinstance(item, TimelineClip):
@@ -266,7 +264,7 @@ def build_filtergraph(
                 atempo = _atempo_chain(item.speed_factor)
                 trim_parts.append(
                     f"[{i}:a]atrim=start={item.source_in_seconds}:end={item.source_out_seconds},"
-                    f"asetpts=PTS-STARTPTS{atempo}[a{n}];"
+                    f"asetpts=PTS-STARTPTS{atempo}{_clip_sound_chain(item)}[a{n}];"
                 )
             else:
                 trim_parts.append(
@@ -318,6 +316,23 @@ def build_filtergraph(
     # own "".join(trim_parts) + final-stage convention exactly.
     full_filter = "".join(trim_parts).rstrip(";")
     return input_args, full_filter, video_out, audio_out
+
+
+def _clip_sound_chain(item: TimelineClip) -> str:
+    """The clip's own volume and sound fades, appended after its
+    retiming (so fade times are on-screen seconds), or "" when the
+    clip's sound is untouched."""
+    parts: list[str] = []
+    if item.volume != 1.0:
+        parts.append(f"volume={item.volume:.3f}")
+    duration = item.on_screen_duration_seconds
+    fade_in = min(item.audio_fade_in_seconds, duration)
+    fade_out = min(item.audio_fade_out_seconds, duration)
+    if fade_in > 0:
+        parts.append(f"afade=t=in:st=0:d={fade_in:.3f}")
+    if fade_out > 0:
+        parts.append(f"afade=t=out:st={max(0.0, duration - fade_out):.3f}:d={fade_out:.3f}")
+    return "".join(f",{part}" for part in parts)
 
 
 def _has_audio_track(media: MediaItem) -> bool:

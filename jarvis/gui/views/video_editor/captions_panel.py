@@ -20,6 +20,7 @@ export step later burns in via build_caption_filter_from_lines()."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 import customtkinter as ctk
@@ -29,6 +30,7 @@ from jarvis.gui.views.video_editor.common import LabeledDropdown, status_label
 from jarvis.gui.widgets import Card
 from jarvis.video_editor.captions import (
     CAPTION_ANIMATION_CHOICES,
+    CAPTION_STYLE_PRESETS,
     CAPTION_LANGUAGE_CHOICES,
     CAPTION_LANGUAGE_LABELS,
     CAPTION_POSITION_CHOICES,
@@ -36,10 +38,15 @@ from jarvis.video_editor.captions import (
     DEFAULT_CAPTION_FONT_SIZE,
     DEFAULT_CAPTION_HIGHLIGHT_COLOR,
     DEFAULT_CAPTION_LANGUAGE,
+    CaptionError,
     CaptionLine,
     CaptionStyle,
+    apply_caption_preset,
+    import_srt,
 )
+from jarvis.video_editor.text_render import FONT_CHOICES, FONT_LABELS
 
+_FONT_DISPLAY_CHOICES = tuple(FONT_LABELS[font] for font in FONT_CHOICES)
 _LANGUAGE_DISPLAY_CHOICES = tuple(CAPTION_LANGUAGE_LABELS[code] for code in CAPTION_LANGUAGE_CHOICES)
 _LANGUAGE_CODE_BY_LABEL = {label: code for code, label in CAPTION_LANGUAGE_LABELS.items()}
 
@@ -81,6 +88,10 @@ class CaptionsPanel(ctk.CTkFrame):
         self._on_export_srt_requested = on_export_srt_requested
         self._enabled = False
         self._lines: list[CaptionLine] = []
+        # Style values with no control of their own, kept so an applied
+        # template or style survives the next edit.
+        self._outline_color = "black"
+        self._shadow_color = CaptionStyle().shadow_color
 
         card = Card(self)
         card.pack(fill="x")
@@ -88,78 +99,103 @@ class CaptionsPanel(ctk.CTkFrame):
         self._inner.pack(fill="x", padx=theme.SPACE_MD, pady=theme.SPACE_MD)
 
         ctk.CTkLabel(
-            self._inner, text="💬 ANIMATED CAPTIONS",
+            self._inner, text="💬 SUBTITRAI",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
             text_color=theme.ACCENT_PRIMARY, anchor="w",
         ).pack(anchor="w", pady=(0, theme.SPACE_SM))
         ctk.CTkLabel(
             self._inner,
-            text="Real, word-by-word timed captions transcribed from the first clip's own speech "
-                 "(Lithuanian and other languages supported).",
+            text="Sukurkite subtitrus iš pirmo klipo kalbos (lietuvių ir kitomis kalbomis), įkelkite savo "
+                 "SRT failą arba įrašykite eilutes ranka.",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
             text_color=theme.TEXT_MUTED, anchor="w", wraplength=600, justify="left",
         ).pack(anchor="w", pady=(0, theme.SPACE_SM))
 
         self._toggle_var = ctk.StringVar(value="off")
         ctk.CTkSwitch(
-            self._inner, text="Enable captions for this export", variable=self._toggle_var,
+            self._inner, text="Rodyti subtitrus", variable=self._toggle_var, text_color=theme.TEXT_PRIMARY,
             onvalue="on", offvalue="off", command=self._on_toggle,
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),
         ).pack(anchor="w")
 
         self._controls_row = ctk.CTkFrame(self._inner, fg_color="transparent")
 
-        self._animation_dropdown = LabeledDropdown(self._controls_row, "Style:", CAPTION_ANIMATION_CHOICES)
+        self._animation_dropdown = LabeledDropdown(self._controls_row, "Animacija:", CAPTION_ANIMATION_CHOICES)
         self._animation_dropdown.dropdown.configure(command=lambda _v: self._emit())
-        self._animation_dropdown.pack(side="left", padx=(0, theme.SPACE_MD))
+        self._animation_dropdown.grid(row=0, column=0, sticky="w", padx=(0, theme.SPACE_SM), pady=(0, theme.SPACE_XS))
 
-        self._position_dropdown = LabeledDropdown(self._controls_row, "Position:", CAPTION_POSITION_CHOICES)
+        self._position_dropdown = LabeledDropdown(self._controls_row, "Vieta:", CAPTION_POSITION_CHOICES)
         self._position_dropdown.set("bottom")
         self._position_dropdown.dropdown.configure(command=lambda _v: self._emit())
-        self._position_dropdown.pack(side="left")
+        self._position_dropdown.grid(row=0, column=1, sticky="w", pady=(0, theme.SPACE_XS))
 
-        self._language_dropdown = LabeledDropdown(self._controls_row, "Language:", _LANGUAGE_DISPLAY_CHOICES)
+        self._language_dropdown = LabeledDropdown(self._controls_row, "Kalba:", _LANGUAGE_DISPLAY_CHOICES)
         self._language_dropdown.set(CAPTION_LANGUAGE_LABELS[DEFAULT_CAPTION_LANGUAGE])
-        self._language_dropdown.pack(side="left", padx=(theme.SPACE_MD, 0))
+        self._language_dropdown.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, theme.SPACE_XS))
 
+        actions = ctk.CTkFrame(self._controls_row, fg_color="transparent")
+        actions.grid(row=2, column=0, columnspan=2, sticky="w")
         if self._on_generate_requested is not None:
             ctk.CTkButton(
-                self._controls_row, text="📝 Generate & Edit Subtitles", width=190,
+                actions, text="📝 Sukurti iš kalbos", width=150, height=28,
                 command=self._on_generate_clicked,
-            ).pack(side="left", padx=(theme.SPACE_MD, 0))
+            ).pack(side="left", padx=(0, theme.SPACE_XS))
+        secondary = dict(
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        )
+        self.import_srt_button = ctk.CTkButton(
+            actions, text="📂 Įkelti SRT", width=100, height=28, command=self._on_import_srt_clicked, **secondary,
+        )
+        self.import_srt_button.pack(side="left", padx=(0, theme.SPACE_XS))
+        self.add_line_button = ctk.CTkButton(
+            actions, text="➕ Eilutė", width=80, height=28, command=self.add_line, **secondary,
+        )
+        self.add_line_button.pack(side="left")
+
+        self._looks_row = ctk.CTkFrame(self._inner, fg_color="transparent")
+        ctk.CTkLabel(
+            self._looks_row, text="Subtitrų stilius:",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_SECONDARY,
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        self.preset_buttons: dict[str, ctk.CTkButton] = {}
+        for n, name in enumerate(CAPTION_STYLE_PRESETS):
+            button = ctk.CTkButton(
+                self._looks_row, text=name, width=96, height=26, command=lambda n=name: self.apply_preset(n),
+                fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
+                border_color=theme.BORDER_SUBTLE,
+            )
+            button.grid(row=1 + n // 3, column=n % 3, padx=(0, theme.SPACE_XS), pady=(0, theme.SPACE_XS), sticky="w")
+            self.preset_buttons[name] = button
+        self._font_dropdown = LabeledDropdown(self._looks_row, "Šriftas:", _FONT_DISPLAY_CHOICES)
+        self._font_dropdown.dropdown.configure(command=lambda _v: self._emit())
+        self._font_dropdown.grid(row=3, column=0, columnspan=2, sticky="we")
 
         self._style_row = ctk.CTkFrame(self._inner, fg_color="transparent")
 
-        self._font_size_entry = ctk.CTkEntry(self._style_row, width=55)
-        self._font_size_entry.insert(0, str(DEFAULT_CAPTION_FONT_SIZE))
-        ctk.CTkLabel(self._style_row, text="Size:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
-        self._font_size_entry.pack(side="left", padx=(0, theme.SPACE_MD))
+        def labeled_entry(row: int, column: int, label: str, width: int, value: str) -> ctk.CTkEntry:
+            cell = ctk.CTkFrame(self._style_row, fg_color="transparent")
+            cell.grid(row=row, column=column, sticky="w", padx=(0, theme.SPACE_SM), pady=(0, theme.SPACE_XS))
+            ctk.CTkLabel(
+                cell, text=label, width=78, anchor="w", text_color=theme.TEXT_SECONDARY,
+                font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            ).pack(side="left")
+            entry = ctk.CTkEntry(cell, width=width)
+            entry.insert(0, value)
+            entry.pack(side="left")
+            return entry
 
-        self._color_entry = ctk.CTkEntry(self._style_row, width=70)
-        self._color_entry.insert(0, DEFAULT_CAPTION_COLOR)
-        ctk.CTkLabel(self._style_row, text="Color:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
-        self._color_entry.pack(side="left", padx=(0, theme.SPACE_MD))
-
-        self._highlight_color_entry = ctk.CTkEntry(self._style_row, width=70)
-        self._highlight_color_entry.insert(0, DEFAULT_CAPTION_HIGHLIGHT_COLOR)
-        ctk.CTkLabel(self._style_row, text="Highlight:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
-        self._highlight_color_entry.pack(side="left", padx=(0, theme.SPACE_MD))
-
-        self._outline_width_entry = ctk.CTkEntry(self._style_row, width=45)
-        self._outline_width_entry.insert(0, "2")
-        ctk.CTkLabel(self._style_row, text="Outline:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
-        self._outline_width_entry.pack(side="left", padx=(0, theme.SPACE_MD))
-
-        self._shadow_offset_entry = ctk.CTkEntry(self._style_row, width=45)
-        self._shadow_offset_entry.insert(0, "0")
-        ctk.CTkLabel(self._style_row, text="Shadow:", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
-        self._shadow_offset_entry.pack(side="left", padx=(0, theme.SPACE_MD))
+        self._font_size_entry = labeled_entry(0, 0, "Dydis:", 55, str(DEFAULT_CAPTION_FONT_SIZE))
+        self._color_entry = labeled_entry(0, 1, "Spalva:", 75, DEFAULT_CAPTION_COLOR)
+        self._outline_width_entry = labeled_entry(1, 0, "Kontūras:", 55, "2")
+        self._highlight_color_entry = labeled_entry(1, 1, "Paryškinta:", 75, DEFAULT_CAPTION_HIGHLIGHT_COLOR)
+        self._shadow_offset_entry = labeled_entry(2, 0, "Šešėlis:", 55, "0")
 
         self._background_var = ctk.StringVar(value="on")
         ctk.CTkSwitch(
-            self._style_row, text="Background", variable=self._background_var, onvalue="on", offvalue="off",
+            self._style_row, text="Fonas", variable=self._background_var, text_color=theme.TEXT_SECONDARY, onvalue="on", offvalue="off",
             command=self._emit, font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
-        ).pack(side="left")
+        ).grid(row=2, column=1, sticky="w", pady=(0, theme.SPACE_XS))
 
         for entry in (
             self._font_size_entry, self._color_entry, self._highlight_color_entry,
@@ -191,7 +227,49 @@ class CaptionsPanel(ctk.CTkFrame):
             entry.delete(0, "end")
             entry.insert(0, value)
         self._background_var.set("on" if style.background else "off")
+        self._font_dropdown.set(FONT_LABELS.get(style.font, _FONT_DISPLAY_CHOICES[0]))
+        self._outline_color, self._shadow_color = style.outline_color, style.shadow_color
         self._on_toggle()
+
+    def current_style(self) -> CaptionStyle | None:
+        """The style the controls show, or None while a number field
+        holds something that isn't a number."""
+        try:
+            font_size = int(self._font_size_entry.get())
+            outline_width = int(self._outline_width_entry.get())
+            shadow_offset = int(self._shadow_offset_entry.get())
+        except ValueError:
+            return None
+        return CaptionStyle(
+            animation=self._animation_dropdown.get(), position=self._position_dropdown.get(),
+            font_size=font_size, color=self._color_entry.get().strip() or DEFAULT_CAPTION_COLOR,
+            highlight_color=self._highlight_color_entry.get().strip() or DEFAULT_CAPTION_HIGHLIGHT_COLOR,
+            outline_width=outline_width, shadow_offset=shadow_offset,
+            background=self._background_var.get() == "on",
+            outline_color=self._outline_color, shadow_color=self._shadow_color,
+            font=FONT_CHOICES[_FONT_DISPLAY_CHOICES.index(self._font_dropdown.get())],
+        )
+
+    def apply_preset(self, name: str) -> None:
+        """A subtitle look (captions.CAPTION_STYLE_PRESETS) on top of the
+        current size, position and animation."""
+        style = self.current_style() or CaptionStyle()
+        self.apply_style(apply_caption_preset(style, name))
+
+    def reset(self) -> None:
+        """Captions OFF and no lines - the state of a project that never
+        enabled captions (used when another project is opened). Emits
+        nothing; the dashboard resets its own caption state itself."""
+        self._toggle_var.set("off")
+        self._enabled = False
+        self._controls_row.pack_forget()
+        self._looks_row.pack_forget()
+        self._style_row.pack_forget()
+        self._lines = []
+        for child in self._lines_container.winfo_children():
+            child.destroy()
+        self._lines_container.pack_forget()
+        self._lines_status.pack_forget()
 
     def _on_generate_clicked(self) -> None:
         self._on_generate_requested(self.get_language())
@@ -208,7 +286,7 @@ class CaptionsPanel(ctk.CTkFrame):
 
     def set_generating_state(self, *, generating: bool) -> None:
         if generating:
-            self._lines_status.configure(text="Transcribing speech...")
+            self._lines_status.configure(text="Atpažįstama kalba...", text_color=theme.TEXT_MUTED)
             self._lines_status.pack(anchor="w", pady=(theme.SPACE_SM, 0))
         else:
             self._lines_status.pack_forget()
@@ -232,7 +310,7 @@ class CaptionsPanel(ctk.CTkFrame):
 
         if self._on_export_srt_requested is not None and self._lines:
             ctk.CTkButton(
-                self._lines_container, text="💾 Export Subtitles as .SRT", width=200,
+                self._lines_container, text="💾 Išsaugoti SRT", width=140,
                 command=lambda: self._on_export_srt_requested(self._lines),
                 fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
             ).pack(anchor="w", pady=(theme.SPACE_SM, 0))
@@ -251,12 +329,12 @@ class CaptionsPanel(ctk.CTkFrame):
         timing_row.pack(fill="x")
         start_entry = ctk.CTkEntry(timing_row, width=60)
         start_entry.insert(0, f"{line.start_seconds:g}")
-        ctk.CTkLabel(timing_row, text="Start (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkLabel(timing_row, text="Nuo (s):", text_color=theme.TEXT_SECONDARY, font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         start_entry.pack(side="left", padx=(0, theme.SPACE_MD))
 
         end_entry = ctk.CTkEntry(timing_row, width=60)
         end_entry.insert(0, f"{line.end_seconds:g}")
-        ctk.CTkLabel(timing_row, text="End (s):", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
+        ctk.CTkLabel(timing_row, text="Iki (s):", text_color=theme.TEXT_SECONDARY, font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION)).pack(side="left", padx=(0, theme.SPACE_XS))
         end_entry.pack(side="left")
 
         error_label = status_label(inner, "", kind="error")
@@ -282,9 +360,43 @@ class CaptionsPanel(ctk.CTkFrame):
             entry.bind("<Return>", on_change)
 
         ctk.CTkButton(
-            inner, text="🗑 Remove Line", width=110, height=24, command=lambda i=index: self._remove_line(i),
+            inner, text="🗑 Pašalinti", width=100, height=24, command=lambda i=index: self._remove_line(i),
             fg_color=theme.BG_CARD, hover_color=theme.DANGER, border_width=1, border_color=theme.BORDER_SUBTLE,
         ).pack(anchor="w", pady=(theme.SPACE_XS, 0))
+
+    def _on_import_srt_clicked(self) -> None:
+        from tkinter import filedialog
+
+        path = filedialog.askopenfilename(
+            title="Įkelti subtitrus", filetypes=[("SRT subtitrai", "*.srt"), ("Visi failai", "*.*")],
+        )
+        if path:
+            self.import_srt_file(Path(path))
+
+    def import_srt_file(self, path: Path) -> bool:
+        """Loads an .srt as the editable lines (captions turned on)."""
+        try:
+            lines = import_srt(path)
+        except CaptionError as e:
+            self.set_generate_error(str(e))
+            return False
+        self._ensure_enabled()
+        self.set_lines(lines)
+        self._emit_lines()
+        return True
+
+    def add_line(self) -> None:
+        """A new line typed by hand, 2 s right after the last one."""
+        start = round(self._lines[-1].end_seconds, 2) if self._lines else 0.0
+        self._ensure_enabled()
+        self._lines.append(CaptionLine(text="Naujas subtitras", start_seconds=start, end_seconds=start + 2.0))
+        self.set_lines(self._lines)
+        self._emit_lines()
+
+    def _ensure_enabled(self) -> None:
+        if not self._enabled:
+            self._toggle_var.set("on")
+            self._on_toggle()
 
     def _remove_line(self, index: int) -> None:
         del self._lines[index]
@@ -300,9 +412,11 @@ class CaptionsPanel(ctk.CTkFrame):
         self._enabled = self._toggle_var.get() == "on"
         if self._enabled:
             self._controls_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
+            self._looks_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
             self._style_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
         else:
             self._controls_row.pack_forget()
+            self._looks_row.pack_forget()
             self._style_row.pack_forget()
         self._emit()
 
@@ -310,17 +424,6 @@ class CaptionsPanel(ctk.CTkFrame):
         if not self._enabled:
             self._on_style_changed(None)
             return
-        try:
-            font_size = int(self._font_size_entry.get())
-            outline_width = int(self._outline_width_entry.get())
-            shadow_offset = int(self._shadow_offset_entry.get())
-        except ValueError:
-            return
-        style = CaptionStyle(
-            animation=self._animation_dropdown.get(), position=self._position_dropdown.get(),
-            font_size=font_size, color=self._color_entry.get().strip() or DEFAULT_CAPTION_COLOR,
-            highlight_color=self._highlight_color_entry.get().strip() or DEFAULT_CAPTION_HIGHLIGHT_COLOR,
-            outline_width=outline_width, shadow_offset=shadow_offset,
-            background=self._background_var.get() == "on",
-        )
-        self._on_style_changed(style)
+        style = self.current_style()
+        if style is not None:
+            self._on_style_changed(style)

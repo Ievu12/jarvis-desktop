@@ -166,6 +166,14 @@ class StickerInstance:
     opacity: float = 1.0
     animation: StickerAnimation = "pop_in"
     tint: tuple[int, int, int] | None = None
+    animation_speed: float = 1.0
+    """How fast the animation runs (spin, float, bounce, blink, pop): 1.0 normal, 2.0 twice as fast."""
+    animation_intensity: float = 1.0
+    """How strong it is (float/bounce/pop distance, how far blink dims): 0 = none, 1.0 normal."""
+    fade_in_seconds: float = 0.0
+    """Appear gradually over this long (0 = appear at once), with any animation."""
+    fade_out_seconds: float = 0.0
+    """Disappear gradually over this long (0 = vanish at once)."""
 
     def validate(self) -> list[str]:
         """Never raises - matches every other dataclass's own
@@ -189,11 +197,27 @@ class StickerInstance:
             problems.append(f"Sticker opacity {self.opacity} must be between 0.0 and 1.0.")
         if self.animation not in STICKER_ANIMATION_CHOICES:
             problems.append(f"Unknown sticker animation: {self.animation!r}.")
+        if not (0.25 <= self.animation_speed <= 4.0):
+            problems.append(f"Animation speed {self.animation_speed} must be between 0.25 and 4.")
+        if not (0.0 <= self.animation_intensity <= 3.0):
+            problems.append(f"Animation intensity {self.animation_intensity} must be between 0 and 3.")
+        if self.fade_in_seconds < 0.0 or self.fade_out_seconds < 0.0:
+            problems.append("Appear/disappear times cannot be negative.")
+        elif self.fade_in_seconds + self.fade_out_seconds > self.end_seconds - self.start_seconds + 1e-6:
+            problems.append("Appear and disappear times together are longer than the sticker is shown.")
         return problems
 
 
 def render_builtin_sticker(shape: StickerShape, *, output_path: Path, tint: tuple[int, int, int] | None = None) -> None:
-    """Renders `shape` as a real, transparent PNG via Pillow's own
+    """Writes builtin_sticker_image(shape, tint=tint) to `output_path`
+    as a PNG - the file ffmpeg's `overlay` input reads at export."""
+    image = builtin_sticker_image(shape, tint=tint)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_path, "PNG")
+
+
+def builtin_sticker_image(shape: StickerShape, *, tint: tuple[int, int, int] | None = None):
+    """Draws `shape` as a real, transparent RGBA image via Pillow's own
     ImageDraw - the exact same drawing library jarvis.design_studio
     .render/.reel_generator.scene_render already use elsewhere in this
     codebase for drawn (non-photographic) graphics, applied here to a
@@ -445,8 +469,7 @@ def render_builtin_sticker(shape: StickerShape, *, output_path: Path, tint: tupl
             w = rng.uniform(size * 0.04, size * 0.08)
             draw.rectangle([x, y, x + w, y + w], fill=(*color, 230))
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output_path, "PNG")
+    return image
 
 
 def _star_points(cx: float, cy: float, outer_r: float, inner_r: float, points: int) -> list[tuple[float, float]]:
@@ -467,10 +490,18 @@ def _animation_overlay_expressions(
     position expressions implementing `sticker.animation`. `t` is
     ffmpeg's own current-timestamp variable (seconds, absolute - not
     relative to the sticker's own start) - every expression below
-    anchors to `sticker.start_seconds` explicitly for this reason."""
-    base_x = sticker.x_fraction * canvas_width - sticker_width / 2
-    base_y = sticker.y_fraction * canvas_height - sticker_height / 2
+    anchors to `sticker.start_seconds` explicitly for this reason.
+
+    The sticker is centered on (x_fraction, y_fraction) using overlay's
+    own `overlay_w`/`overlay_h` (the REAL composited size) rather than
+    the pre-rotation size: `rotate` expands the image to fit the turned
+    corners, and centering on the unrotated size shifted every rotated
+    sticker down/right of where it was placed. Unrotated stickers are
+    unaffected (overlay_w == sticker_width)."""
+    base_x = f"{sticker.x_fraction * canvas_width}-overlay_w/2"
+    base_y = f"{sticker.y_fraction * canvas_height}-overlay_h/2"
     start = sticker.start_seconds
+    speed, strength = sticker.animation_speed, sticker.animation_intensity
 
     if sticker.animation == "pop_in":
         # Scale-like effect approximated via a quick vertical settle
@@ -478,15 +509,45 @@ def _animation_overlay_expressions(
         # not just overlay's own x/y - this approximates "pop" via a
         # fast ease-in slide from slightly below, which reads as a pop
         # at normal playback speed, a real, intentional simplification).
-        return (f"{base_x}", f"if(lt(t,{start}+0.15),{base_y}+20*(1-(t-{start})/0.15),{base_y})")
+        pop = 0.15 / speed
+        return (f"{base_x}", f"if(lt(t,{start}+{pop:g}),{base_y}+{20 * strength:g}*(1-(t-{start})/{pop:g}),{base_y})")
     if sticker.animation == "float":
-        return (f"{base_x}", f"{base_y}+8*sin((t-{start})*2)")
+        return (f"{base_x}", f"{base_y}+{8 * strength:g}*sin((t-{start})*{2 * speed:g})")
     if sticker.animation == "bounce":
-        return (f"{base_x}", f"{base_y}-abs(15*sin((t-{start})*4))")
+        return (f"{base_x}", f"{base_y}-abs({15 * strength:g}*sin((t-{start})*{4 * speed:g}))")
     # "none"/"fade_in_out"/"spin"/"blink" use a fixed position - fade/
     # blink are opacity-only (see _alpha_expression() below), spin is
     # rotation-only (see build_sticker_filter()'s own rotate stage).
     return (f"{base_x}", f"{base_y}")
+
+
+_TIME_DRIVEN_ANIMATIONS = ("spin", "blink", "fade_in_out")
+
+
+def blink_period_seconds(sticker: StickerInstance) -> float:
+    return 0.6 / sticker.animation_speed
+
+
+def blink_dim_factor(sticker: StickerInstance) -> float:
+    """The opacity multiplier during blink's "off" half (0.2 at normal intensity)."""
+    return max(0.0, 1.0 - 0.8 * sticker.animation_intensity)
+
+
+def needs_time_stream(sticker: StickerInstance) -> bool:
+    """Whether the sticker image must be fed as a timed stream (its
+    look changes over time), not a single still frame."""
+    return sticker.animation in _TIME_DRIVEN_ANIMATIONS or sticker.fade_in_seconds > 0 or sticker.fade_out_seconds > 0
+
+
+def sticker_fade_seconds(sticker: StickerInstance) -> float:
+    """The "fade_in_out" ramp length - shared with
+    jarvis.video_editor.preview_compositor so the live preview fades
+    over exactly the same window the export does."""
+    return max(0.05, min(0.4, (sticker.end_seconds - sticker.start_seconds) / 2))
+
+
+def is_animated_gif(path: Path | None) -> bool:
+    return path is not None and path.suffix.lower() == ".gif"
 
 
 def _alpha_clause(sticker: StickerInstance, *, label_in: str, label_out: str) -> str:
@@ -504,22 +565,42 @@ def _alpha_clause(sticker: StickerInstance, *, label_in: str, label_out: str) ->
     A constant opacity (every other animation) stays on the cheaper,
     simpler `colorchannelmixer=aa=<constant>` stage."""
     base = sticker.opacity
-    base_255 = round(base * 255)
 
     if sticker.animation == "fade_in_out":
         start, end = sticker.start_seconds, sticker.end_seconds
-        fade = max(0.05, min(0.4, (end - start) / 2))
+        fade = sticker_fade_seconds(sticker)
+        # The fades scale whatever alpha the sticker already has, so the
+        # constant opacity is applied first - without it a faded sticker
+        # ignored its own opacity setting entirely.
+        opacity_stage = f"colorchannelmixer=aa={base}," if base != 1.0 else ""
         return (
-            f"[{label_in}]fade=t=in:st={start}:d={fade}:alpha=1,"
+            f"[{label_in}]{opacity_stage}fade=t=in:st={start}:d={fade}:alpha=1,"
             f"fade=t=out:st={end - fade}:d={fade}:alpha=1[{label_out}]"
         )
     if sticker.animation == "blink":
+        # Scales the sticker's OWN per-pixel alpha - a constant `a=`
+        # here used to make every transparent pixel opaque, so a
+        # blinking heart showed up as a solid square.
         start = sticker.start_seconds
+        period = blink_period_seconds(sticker)
         return (
             f"[{label_in}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-            f"a='if(lt(mod(T-{start},0.6),0.3),{base_255},{round(base_255 * 0.2)})'[{label_out}]"
+            f"a='alpha(X,Y)*if(lt(mod(T-{start},{period:g}),{period / 2:g}),{base},{base * blink_dim_factor(sticker):g})'"
+            f"[{label_out}]"
         )
     return f"[{label_in}]colorchannelmixer=aa={base}[{label_out}]"
+
+
+def _appear_disappear_clause(sticker: StickerInstance, *, label_in: str, label_out: str) -> str:
+    """Gradual appear/disappear on top of whatever the animation does."""
+    stages = []
+    if sticker.fade_in_seconds > 0:
+        stages.append(f"fade=t=in:st={sticker.start_seconds}:d={sticker.fade_in_seconds}:alpha=1")
+    if sticker.fade_out_seconds > 0:
+        stages.append(
+            f"fade=t=out:st={sticker.end_seconds - sticker.fade_out_seconds}:d={sticker.fade_out_seconds}:alpha=1"
+        )
+    return f"[{label_in}]{','.join(stages)}[{label_out}]"
 
 
 def build_sticker_filter(
@@ -552,7 +633,13 @@ def build_sticker_filter(
 
     scaled_label = f"stk{input_index}scaled"
     alpha_label = f"stk{input_index}"
-    alpha_clause = _alpha_clause(sticker, label_in=scaled_label, label_out=alpha_label)
+    if sticker.fade_in_seconds > 0 or sticker.fade_out_seconds > 0:
+        alpha_clause = (
+            _alpha_clause(sticker, label_in=scaled_label, label_out=f"{alpha_label}a") + ";"
+            + _appear_disappear_clause(sticker, label_in=f"{alpha_label}a", label_out=alpha_label)
+        )
+    else:
+        alpha_clause = _alpha_clause(sticker, label_in=scaled_label, label_out=alpha_label)
 
     rotate_clause = ""
     rotated_label = alpha_label
@@ -560,7 +647,7 @@ def build_sticker_filter(
         import math
 
         if sticker.animation == "spin":
-            angle_expr = f"(t-{sticker.start_seconds})*2*PI"
+            angle_expr = f"(t-{sticker.start_seconds})*2*PI*{sticker.animation_speed:g}"
         else:
             angle_expr = f"{math.radians(sticker.rotation_degrees)}"
         rotated_label = f"stk{input_index}rot"
@@ -568,12 +655,32 @@ def build_sticker_filter(
             f";[{alpha_label}]rotate={angle_expr}:c=none:ow=rotw(iw):oh=roth(ih)[{rotated_label}]"
         )
 
+    # An animated GIF loops for as long as the sticker is visible and
+    # starts playing at the sticker's own start time. Before, the GIF
+    # stream started at t=0 of the whole video and played once, so a
+    # GIF placed at 5s had usually already finished (frozen on its last
+    # frame) by the time it appeared. -ignore_loop 0 loops it forever;
+    # -t bounds that infinite input to the sticker's own duration so
+    # ffmpeg still terminates; setpts shifts its first frame to `start`.
+    gif_prefix = ""
+    extra_input_args = ["-i", str(image_path)]
+    if needs_time_stream(sticker):
+        # A plain `-i image.png` is ONE frame at t=0 that overlay keeps
+        # repeating, so `rotate`'s t, `geq`'s T and `fade` all saw t=0
+        # forever: "spin" froze at one angle, "blink" never blinked and
+        # "fade_in_out" stayed at its t=0 alpha. -loop 1 makes the image
+        # a real stream whose timestamps follow the timeline's own.
+        extra_input_args = ["-loop", "1", "-framerate", "30", "-t", f"{sticker.end_seconds}", "-i", str(image_path)]
+    if is_animated_gif(sticker.custom_path):
+        duration = sticker.end_seconds - sticker.start_seconds
+        extra_input_args = ["-ignore_loop", "0", "-t", f"{duration}", "-i", str(image_path)]
+        gif_prefix = f"setpts=PTS-STARTPTS+{sticker.start_seconds}/TB,"
+
     filter_clause = (
-        f"[{input_index}:v]scale={sticker_px}:{sticker_px},format=rgba[{scaled_label}];"
+        f"[{input_index}:v]{gif_prefix}scale={sticker_px}:{sticker_px},format=rgba[{scaled_label}];"
         f"{alpha_clause}"
         f"{rotate_clause};"
         f"[{video_label}][{rotated_label}]overlay=x='{x_expr}':y='{y_expr}':"
         f"enable='between(t,{sticker.start_seconds},{sticker.end_seconds})'[{output_label}]"
     )
-    extra_input_args = ["-i", str(image_path)]
     return extra_input_args, filter_clause

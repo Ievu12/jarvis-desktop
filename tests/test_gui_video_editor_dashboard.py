@@ -16,6 +16,7 @@ just the backend modules in isolation."""
 
 from __future__ import annotations
 
+import dataclasses
 import queue
 import subprocess
 import time
@@ -28,6 +29,7 @@ from jarvis.gui.views.video_editor import dashboard as dashboard_module
 from jarvis.gui.views.video_editor.dashboard import VideoEditorView
 from jarvis.gui.worker import CancelableTaskResult
 from jarvis.video_editor import db, storage
+from jarvis.video_editor.timeline import TransitionSpec
 from jarvis.video_studio.ffmpeg_utils import ffmpeg_available
 from jarvis.video_studio.transcribe import model_is_downloaded
 
@@ -130,6 +132,8 @@ def test_category_sidebar_switches_panel_visibility_without_losing_state(root):
         view._on_category_selected(category)
         root.update()
         assert view._timeline_panel.winfo_ismapped()
+        assert view._filters_panel.winfo_ismapped() == (category == "filters")
+        assert view._transitions_panel.winfo_ismapped() == (category == "transitions")
 
 
 def test_new_project_creates_a_real_project(root):
@@ -353,7 +357,7 @@ def test_captions_panel_shows_export_srt_button_once_lines_are_set(root):
             yield from _walk(child)
 
     buttons = [
-        w for w in _walk(panel) if isinstance(w, ctk.CTkButton) and "Export Subtitles" in w.cget("text")
+        w for w in _walk(panel) if isinstance(w, ctk.CTkButton) and "Išsaugoti SRT" in w.cget("text")
     ]
     assert len(buttons) == 1
 
@@ -364,16 +368,18 @@ def test_generate_subtitles_requires_an_open_project(root):
     assert view._caption_lines is None
 
 
-def test_changing_caption_style_clears_previously_edited_lines(root):
+def test_changing_caption_style_keeps_edited_lines(root):
     from jarvis.video_editor.captions import CaptionLine
 
     view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
-    view._caption_lines = [CaptionLine(text="Stale edit", start_seconds=0.0, end_seconds=1.0)]
+    edited = [CaptionLine(text="Mano tekstas", start_seconds=0.0, end_seconds=1.0)]
+    view._caption_lines = list(edited)
 
     view._captions_panel._toggle_var.set("on")
     view._captions_panel._on_toggle()
+    view._captions_panel.apply_preset("Geltonas")
 
-    assert view._caption_lines is None
+    assert view._caption_lines == edited
 
 
 @pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
@@ -630,13 +636,13 @@ def test_music_file_chosen_without_an_open_project_shows_error(root, tmp_path):
 
 
 @pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
-def test_multitrack_view_updates_when_timeline_and_text_overlays_change(root, tmp_path):
+def test_track_timeline_updates_when_timeline_and_text_overlays_change(root, tmp_path):
     from jarvis.video_editor.text_overlay import TextOverlay
 
     view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
     view._on_new_project_clicked()
     root.update()
-    empty_count = len(view._multitrack_view._canvas.find_all())
+    empty_count = len(view._track_timeline._canvas.find_all())
 
     clip_path = tmp_path / "clip.mp4"
     subprocess.run(
@@ -650,7 +656,7 @@ def test_multitrack_view_updates_when_timeline_and_text_overlays_change(root, tm
 
     view._on_text_overlays_changed([TextOverlay(text="Hi", start_seconds=0.5, end_seconds=1.5)])
     root.update()
-    after_count = len(view._multitrack_view._canvas.find_all())
+    after_count = len(view._track_timeline._canvas.find_all())
 
     assert after_count > empty_count
 
@@ -1213,3 +1219,227 @@ def test_full_export_with_real_captions_and_music_produces_a_file(root, tmp_path
     assert result.output_path.is_file()
     assert result.width == 720
     assert result.height == 1280
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_live_preview_quick_add_edit_and_reopen_restores_overlays(root, tmp_path):
+    """The real-time preview flow: quick-add a text and a sticker, edit
+    them as the preview/settings panel would, delete one, and confirm a
+    reopened project shows exactly the edited elements again."""
+    import dataclasses
+
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view._on_quick_add_text()  # no project yet: refused, nothing added
+    assert view._text_overlays == []
+
+    view._on_new_project_clicked()
+    project_id = view._current_project.project_id
+    photo_path = tmp_path / "photo.png"
+    Image.new("RGB", (1080, 1920), color=(0, 0, 255)).save(photo_path)
+    view._on_files_chosen([photo_path])
+    _drain_queue_until(view, lambda: len(view._media_items) == 1)
+    view._on_add_to_timeline_clicked(next(iter(view._media_items.values())))
+    assert view._engine is not None and view._engine.duration > 0
+    view._run_base_frame_decode()  # normally fired by a short after() debounce
+    _drain_queue_until(view, lambda: view._preview_panel._base_frame is not None, timeout=60)
+
+    view._on_quick_add_text()
+    view._on_quick_add_sticker()
+    assert len(view._text_overlays) == 1 and len(view._stickers) == 1
+    assert view._preview_panel.selected == ("sticker", 0)
+    assert {box.kind for box in view._preview_panel.boxes} == {"text", "sticker"}
+
+    moved = dataclasses.replace(view._stickers[0], x_fraction=0.8, rotation_degrees=45.0)
+    view._on_element_edited("sticker", 0, moved, False)
+    assert view._stickers[0] == moved  # applied at once, before the edit is final
+    view._on_element_edited("sticker", 0, moved, True)
+    assert view._stickers_panel._stickers == [moved]  # the Stickers panel list is kept in sync
+
+    edited_text = dataclasses.replace(view._text_overlays[0], text="Sveiki, ąčęėįšųūž!", font_size=96)
+    view._on_element_edited("text", 0, edited_text, True)
+    view._on_element_duplicate_requested("text", 0)
+    assert len(view._text_overlays) == 2
+    view._on_element_delete_requested("text", 1)
+    assert view._text_overlays == [edited_text]
+    view._save_overlays_now()
+
+    reopened = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    reopened._open_project(project_id)
+    assert reopened._text_overlays == [edited_text]
+    assert reopened._stickers == [moved]
+    assert reopened._preview_panel.selected is None
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_one_undo_history_covers_clips_overlays_and_track_edits(root, tmp_path):
+    """Stage 2: a single Undo/Redo history for every kind of edit -
+    clip list, text/sticker panels, track-timeline drags and the
+    settings panel - plus the keyboard shortcuts."""
+    import dataclasses
+
+    from jarvis.video_editor import track_layout
+
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view.pack(fill="both", expand=True)
+    view._on_new_project_clicked()
+    assert not view._history.can_undo()
+    assert view._undo_button.cget("state") == "disabled"
+
+    photo_path = tmp_path / "photo.png"
+    Image.new("RGB", (1080, 1920), color=(0, 0, 255)).save(photo_path)
+    view._on_files_chosen([photo_path])
+    _drain_queue_until(view, lambda: len(view._media_items) == 1)
+    media = next(iter(view._media_items.values()))
+    view._on_add_to_timeline_clicked(media)  # clip list edit
+    view._on_add_to_timeline_clicked(media)
+    view._on_quick_add_text()  # text panel edit
+    assert len(view._timeline_panel.timeline.items) == 2 and len(view._text_overlays) == 1
+    assert view._undo_button.cget("state") == "normal"
+
+    # a track-timeline edit (live updates don't touch the saved state; the final one does)
+    state = view._editor_state()
+    moved = track_layout.move_overlay(state, "text", 0, 1.5, total=6)
+    view._on_track_state_edited(moved, False, "", None)
+    assert view._text_overlays[0].start_seconds == 0
+    view._on_track_state_edited(moved, True, "Perkelta", None)
+    assert view._text_overlays[0].start_seconds == 1.5
+    assert view._text_overlay_panel._overlays[0].start_seconds == 1.5  # the Text panel follows
+
+    # a clip setting from the settings panel
+    view._on_track_selection_changed(("video", 1))
+    assert view._inspector_panel.shown == ("clip", 1)
+    longer = dataclasses.replace(view._timeline_panel.timeline.items[1], display_duration_seconds=5.0)
+    view._on_element_edited("clip", 1, longer, True)
+    assert view._engine.duration == 8
+
+    view._on_undo()
+    assert view._engine.duration == 6
+    view._on_undo()
+    assert view._text_overlays[0].start_seconds == 0
+    view._on_undo()
+    assert view._text_overlays == [] and view._text_overlay_panel._overlays == []
+    view._on_undo()
+    assert len(view._timeline_panel.timeline.items) == 1
+    view._on_redo()
+    view._on_redo()
+    assert len(view._timeline_panel.timeline.items) == 2 and len(view._text_overlays) == 1
+
+    # the saved project matches what's on screen after undo/redo
+    view._save_overlays_now()
+    reloaded_timeline, _ = storage.load_project(view._current_project.project_id)
+    assert reloaded_timeline == view._timeline_panel.timeline
+    assert storage.load_overlays(view._current_project.project_id).text_overlays == tuple(view._text_overlays)
+
+    # keyboard: Ctrl+Z / Ctrl+Y on the window
+    root.deiconify()
+    root.update()
+    view._track_timeline._canvas.focus_force()
+    root.update()
+    before = view._editor_state()
+    root.event_generate("<Control-z>")
+    root.update()
+    assert view._editor_state() != before
+    root.event_generate("<Control-y>")
+    root.update()
+    assert view._editor_state() == before
+    root.withdraw()
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_filters_transitions_and_sticker_drop_go_through_one_history(root, tmp_path):
+    """Stage 3: the Filters/Transitions library panels act on the
+    selected clip (else the one under the playhead), a sticker dropped
+    on the video lands where it was dropped, and each is one Undo step."""
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view.pack(fill="both", expand=True)
+    view._on_new_project_clicked()
+    for n, color in enumerate(((255, 0, 0), (0, 0, 255))):
+        path = tmp_path / f"photo{n}.png"
+        Image.new("RGB", (1080, 1920), color=color).save(path)
+        view._on_files_chosen([path])
+        _drain_queue_until(view, lambda n=n: len(view._media_items) == n + 1)
+    for media in list(view._media_items.values()):
+        view._on_add_to_timeline_clicked(media)
+    assert view._engine.duration == 6
+
+    # filter on the clip under the playhead, then on the selected one, then on all
+    view._on_look_chosen("moody")
+    items = view._timeline_panel.timeline.items
+    assert (items[0].effect.look, items[1].effect.look) == ("moody", "none")
+    view._on_look_intensity_changed(0.4, False)  # still moving: nothing applied yet
+    assert view._timeline_panel.timeline.items[0].effect.look_intensity == 1.0
+    view._on_look_intensity_changed(0.4, True)
+    assert view._timeline_panel.timeline.items[0].effect.look_intensity == 0.4
+    view._on_track_selection_changed(("video", 1))
+    assert view._filters_panel._target_label.cget("text").endswith(view._media_items[items[1].media_item_id].original_filename)
+    view._on_look_apply_all()  # the selected clip has no filter: clears both
+    assert {i.effect.look for i in view._timeline_panel.timeline.items} == {"none"}
+    view._on_undo()
+    assert view._timeline_panel.timeline.items[0].effect.look == "moody"
+
+    # a transition out of the first clip shortens the assembled video by its overlap
+    view._on_track_selection_changed(("video", 0))
+    view._on_transition_chosen("dissolve")
+    assert view._timeline_panel.timeline.items[0].transition_out == TransitionSpec("dissolve", 0.5)
+    assert view._engine.duration == pytest.approx(5.5)
+    assert view._track_timeline._transitions == [(0, 2.5, 3.0, "dissolve")]
+    view._on_transition_duration_changed(1.0, True)
+    assert view._engine.duration == pytest.approx(5.0)
+    assert view._history.undo_label == "Perėjimo trukmė"
+
+    # dropping a sticker from the library onto the video
+    view._set_selection(None)
+    view._on_preview_seek(1.0)
+    view._preview_panel.fraction_at_root = lambda x, y: (0.25, 0.75) if x > 0 else None
+    view._on_sticker_dragged("star", -5, 0, True)  # dropped outside the video
+    assert view._stickers == []
+    view._on_sticker_dragged("star", 10, 10, False)
+    view._on_sticker_dragged("star", 10, 10, True)
+    assert len(view._stickers) == 1
+    sticker = view._stickers[0]
+    assert (sticker.shape, sticker.x_fraction, sticker.y_fraction, sticker.start_seconds) == ("star", 0.25, 0.75, 1.0)
+    assert view._preview_panel.selected == ("sticker", 0)
+    view._on_undo()
+    assert view._stickers == []
+    assert view._timeline_panel.timeline.items[0].transition_out.duration_seconds == 1.0
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
+def test_stage5_stop_clip_sound_layers_and_srt(root, tmp_path):
+    """Stage 5: ⏹ goes back to the start, a clip's sound is muted from
+    its lane, texts change layer, and imported SRT lines survive a
+    subtitle style change - each one Undo step."""
+    view = VideoEditorView(root, llm=None, navigate=lambda k, **kw: None)
+    view.pack(fill="both", expand=True)
+    _setup_project_with_clip(view, tmp_path, duration=2)
+
+    view._on_preview_seek(1.2)
+    view._preview_panel.stop_button.invoke()
+    assert view._engine.position == 0.0 and not view._engine.playing
+
+    assert [b.label for b in view._track_timeline._bars["sound"]] == ["🔊 100%"]
+    view._on_track_selection_changed(("sound", 0))
+    assert view._selection == ("clip", 0)
+    view._inspector_panel._edit(final=True, volume=0.0)
+    assert view._timeline_panel.timeline.items[0].volume == 0.0
+    assert [b.label for b in view._track_timeline._bars["sound"]] == ["🔇 Nutildyta"]
+    view._on_undo()
+    assert view._timeline_panel.timeline.items[0].volume == 1.0
+
+    view._on_quick_add_text()
+    view._on_quick_add_text()
+    view._on_element_edited("text", 0, dataclasses.replace(view._text_overlays[0], text="Apačioje"), True)
+    view._set_selection(("text", 0))
+    view._on_layer_requested("text", 0, +1)
+    assert [o.text for o in view._text_overlays] == ["Naujas tekstas", "Apačioje"]
+    assert view._selection == ("text", 1) and view._history.undo_label == "Sluoksnis"
+
+    srt = tmp_path / "subtitrai.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,500\nSveiki, čia Ieva\n", encoding="utf-8")
+    assert view._captions_panel.import_srt_file(srt)
+    assert [line.text for line in view._caption_lines] == ["Sveiki, čia Ieva"]
+    assert view._caption_style is not None
+    view._captions_panel.apply_preset("TikTok")
+    assert [line.text for line in view._caption_lines] == ["Sveiki, čia Ieva"]
+    view._captions_panel.add_line()
+    assert [(line.start_seconds, line.end_seconds) for line in view._caption_lines][-1] == (1.5, 3.5)

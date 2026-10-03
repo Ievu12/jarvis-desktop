@@ -56,9 +56,36 @@ class TextOverlayPanel(ctk.CTkFrame):
         )
 
     def _on_add_clicked(self) -> None:
-        self._overlays.append(TextOverlay(text="New text", start_seconds=0.0, end_seconds=2.0))
+        self.add_overlay(TextOverlay(text="New text", start_seconds=0.0, end_seconds=2.0))
+
+    # --- owning-dashboard API (edits made in the interactive preview) ------------------------
+
+    def add_overlay(self, overlay: TextOverlay) -> None:
+        self._overlays.append(overlay)
         self._render()
         self._emit()
+
+    def set_overlays(self, overlays: list[TextOverlay]) -> None:
+        """Replaces every row (e.g. when a saved project is reopened)
+        without emitting - the caller already holds this list."""
+        self._overlays = list(overlays)
+        self._render()
+
+    def replace_overlay(self, old: TextOverlay, new: TextOverlay) -> None:
+        """Swaps the first row equal to `old` for `new` without emitting
+        - used after the person moved/resized/restyled `old` in the
+        preview, where the dashboard already applied the change."""
+        for index, overlay in enumerate(self._overlays):
+            if overlay == old:
+                self._overlays[index] = new
+                self._render()
+                return
+
+    def remove_overlay(self, overlay: TextOverlay) -> None:
+        if overlay in self._overlays:
+            self._overlays.remove(overlay)
+            self._render()
+            self._emit()
 
     def _render(self) -> None:
         for child in self._rows_container.winfo_children():
@@ -134,7 +161,11 @@ class TextOverlayPanel(ctk.CTkFrame):
 
         def on_change(_event=None) -> None:
             try:
-                new_overlay = TextOverlay(
+                # replace(), not a new TextOverlay: the fields this row
+                # has no control for (rotation, font, outline, shadow,
+                # background...) are kept as they are.
+                new_overlay = dataclasses.replace(
+                    self._overlays[index],
                     text=text_entry.get(), start_seconds=float(start_entry.get()), end_seconds=float(end_entry.get()),
                     x_fraction=float(x_entry.get()), y_fraction=float(y_entry.get()),
                     font_size=int(size_entry.get()), color=color_entry.get().strip() or "white",

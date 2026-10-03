@@ -49,21 +49,21 @@ class ExportPanel(ctk.CTkFrame):
         inner.pack(fill="x", padx=theme.SPACE_MD, pady=theme.SPACE_MD)
 
         ctk.CTkLabel(
-            inner, text="📤 EXPORT",
+            inner, text="📤 EKSPORTAS",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL, weight="bold"),
             text_color=theme.ACCENT_PRIMARY, anchor="w",
         ).pack(anchor="w", pady=(0, theme.SPACE_SM))
 
         controls_row = ctk.CTkFrame(inner, fg_color="transparent")
         controls_row.pack(fill="x")
-        self._resolution_dropdown = LabeledDropdown(controls_row, "Resolution:", RESOLUTION_TIER_CHOICES)
+        self._resolution_dropdown = LabeledDropdown(controls_row, "Raiška:", RESOLUTION_TIER_CHOICES)
         self._resolution_dropdown.set("1080p")
         self._resolution_dropdown.pack(side="left", padx=(0, theme.SPACE_MD))
 
-        self._export_button = ctk.CTkButton(controls_row, text="📤 Export", command=self._handle_export_clicked, width=140)
+        self._export_button = ctk.CTkButton(controls_row, text="📤 Eksportuoti MP4", command=self._handle_export_clicked, width=140)
         self._export_button.pack(side="left", padx=(0, theme.SPACE_SM))
         self._cancel_button = ctk.CTkButton(
-            controls_row, text="✖ Cancel", command=self._on_cancel_clicked, width=100, state="disabled",
+            controls_row, text="✖ Atšaukti", command=self._on_cancel_clicked, width=100, state="disabled",
             fg_color=theme.DANGER, hover_color=theme.DANGER,
         )
         self._cancel_button.pack(side="left")
@@ -97,12 +97,12 @@ class ExportPanel(ctk.CTkFrame):
             child.destroy()
         status_label(
             self._status_container,
-            f"✅ Exported {result.width}x{result.height}, {format_duration(result.duration_seconds)}, "
+            f"✅ Eksportuota {result.width}x{result.height}, {format_duration(result.duration_seconds)}, "
             f"{format_file_size(result.file_size_bytes)}",
             kind="muted",
         ).pack(anchor="w")
         ctk.CTkButton(
-            self._status_container, text="▶ Open exported file", command=lambda: self._open_file(result.output_path),
+            self._status_container, text="▶ Atidaryti failą", command=lambda: self._open_file(result.output_path),
             width=170, fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1,
             border_color=theme.BORDER_SUBTLE,
         ).pack(anchor="w", pady=(theme.SPACE_XS, 0))
@@ -115,7 +115,7 @@ class ExportPanel(ctk.CTkFrame):
     def show_cancelled(self) -> None:
         for child in self._status_container.winfo_children():
             child.destroy()
-        status_label(self._status_container, "Export cancelled.", kind="muted").pack(anchor="w")
+        status_label(self._status_container, "Eksportas atšauktas.", kind="muted").pack(anchor="w")
 
     def _open_file(self, path: Path) -> None:
         if not path.is_file():

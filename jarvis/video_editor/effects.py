@@ -41,6 +41,42 @@ PHOTO_MOTION_CHOICES: tuple[PhotoMotionKind, ...] = (
 FadeKind = Literal["none", "fade_in", "fade_out", "fade_both"]
 FADE_CHOICES: tuple[FadeKind, ...] = ("none", "fade_in", "fade_out", "fade_both")
 
+LookKind = Literal["none", "moody", "golden_hour", "y2k", "vintage", "cinematic", "natural"]
+LOOK_CHOICES: tuple[LookKind, ...] = ("none", "moody", "golden_hour", "y2k", "vintage", "cinematic", "natural")
+LOOK_LABELS: dict[str, str] = {
+    "none": "Be filtro",
+    "moody": "Moody",
+    "golden_hour": "Golden Hour",
+    "y2k": "Y2K",
+    "vintage": "Vintage",
+    "cinematic": "Cinematic",
+    "natural": "Natural",
+}
+_LOOK_FILTERS: dict[str, str] = {
+    # Darker, cooler, desaturated, with a soft vignette.
+    "moody": "eq=contrast=1.18:brightness=-0.06:saturation=0.72,"
+             "colorbalance=rs=-0.06:gs=-0.02:bs=0.08:rh=0.04:bh=-0.02,vignette=angle=PI/8",
+    # Warm orange-gold light, lifted saturation.
+    "golden_hour": "colorbalance=rs=0.12:gs=0.04:bs=-0.14:rm=0.08:gm=0.02:bm=-0.1:rh=0.06:bh=-0.08,"
+                   "eq=saturation=1.22:brightness=0.03:contrast=1.06",
+    # Punchy, cool-pink, slightly glowy and grainy.
+    "y2k": "eq=saturation=1.5:contrast=1.12:brightness=0.05,"
+           "colorbalance=rs=0.06:gs=-0.04:bs=0.12:rm=0.04:gm=-0.06:bm=0.06,noise=alls=6:allf=u",
+    # Faded, warm-shifted film with grain and vignette.
+    "vintage": "curves=r='0/0.1 0.5/0.56 1/0.96':g='0/0.07 0.5/0.5 1/0.92':b='0/0.12 0.5/0.43 1/0.8',"
+               "eq=saturation=0.8,noise=alls=7:allf=u,vignette=angle=PI/9",
+    # Teal shadows, orange highlights, more contrast.
+    "cinematic": "colorbalance=rs=-0.08:gs=0.0:bs=0.1:rh=0.1:gh=0.02:bh=-0.08,"
+                 "eq=contrast=1.22:saturation=1.08:brightness=-0.03,vignette=angle=PI/9",
+    # A gentle clean-up: a little contrast, color and sharpness.
+    "natural": "eq=contrast=1.06:saturation=1.12:brightness=0.01,unsharp=5:5:0.45",
+}
+# Every look is built only from filters every regular ffmpeg build has
+# (eq, colorbalance, curves, noise, vignette, unsharp, split, blend), so
+# the live preview (which decodes through this same chain) and the
+# export always agree. `noise` uses a fixed seed and no temporal flag,
+# so the grain is the same on every render of the same frame.
+
 _MIN_ZOOM_INTENSITY = 1.0
 _MAX_ZOOM_INTENSITY = 1.5
 # zoompan's own "zoom ratio reached by the end of the segment" - 1.0 is
@@ -89,6 +125,18 @@ class EffectSpec:
     brightness: float = 0.0
     contrast: float = 1.0
     saturation: float = 1.0
+    look: LookKind = "none"
+    look_intensity: float = 1.0
+    """0.0 (no visible change) to 1.0 (the full look) - a mix of the
+    graded and the original picture."""
+
+    @property
+    def is_identity(self) -> bool:
+        """True when this spec changes nothing at all."""
+        return (
+            self.motion == "none" and self.fade == "none" and self.brightness == 0.0 and self.contrast == 1.0
+            and self.saturation == 1.0 and (self.look == "none" or self.look_intensity <= 0.0)
+        )
 
     def validate(self) -> list[str]:
         """Never raises - see Timeline.validate()'s own established
@@ -111,6 +159,10 @@ class EffectSpec:
             problems.append(f"Contrast {self.contrast} is outside the supported 0.0 to 3.0 range.")
         if not (0.0 <= self.saturation <= 3.0):
             problems.append(f"Saturation {self.saturation} is outside the supported 0.0 to 3.0 range.")
+        if self.look not in LOOK_CHOICES:
+            problems.append(f"Unknown filter: {self.look!r}.")
+        if not (0.0 <= self.look_intensity <= 1.0):
+            problems.append(f"Filter intensity {self.look_intensity} is outside the supported 0.0 to 1.0 range.")
         return problems
 
 
@@ -194,6 +246,19 @@ def _color_clause(spec: EffectSpec, *, label_in: str, label_out: str) -> str:
     )
 
 
+def _look_clause(spec: EffectSpec, *, label_in: str, label_out: str, label_prefix: str) -> str:
+    """The `spec.look` grade, mixed with the ungraded picture by
+    `spec.look_intensity` (split -> grade one copy -> blend back)."""
+    grade = _LOOK_FILTERS[spec.look]
+    if spec.look_intensity >= 1.0:
+        return f"{label_in}{grade}{label_out}"
+    plain, graded_in, graded = f"[{label_prefix}_lo]", f"[{label_prefix}_lg]", f"[{label_prefix}_lgo]"
+    return (
+        f"{label_in}split{plain}{graded_in};{graded_in}{grade}{graded};"
+        f"{plain}{graded}blend=all_mode=normal:all_opacity={spec.look_intensity:.3f}{label_out}"
+    )
+
+
 def build_segment_effect_filter(
     spec: EffectSpec, *, width: int, height: int, duration_seconds: float, fps: int,
     video_label: str, output_label: str,
@@ -237,6 +302,14 @@ def build_segment_effect_filter(
         stage_n += 1
         next_label = f"[{output_label}_c{stage_n}]"
         stages.append(_color_clause(spec, label_in=current_label, label_out=next_label))
+        current_label = next_label
+
+    if spec.look != "none" and spec.look_intensity > 0.0:
+        stage_n += 1
+        next_label = f"[{output_label}_l{stage_n}]"
+        stages.append(_look_clause(
+            spec, label_in=current_label, label_out=next_label, label_prefix=f"{output_label}_{stage_n}",
+        ))
         current_label = next_label
 
     if not stages:

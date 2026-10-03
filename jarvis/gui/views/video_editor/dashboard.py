@@ -21,8 +21,12 @@ the precedent)."""
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import queue
 import threading
+import time
+import tkinter as tk
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -33,16 +37,18 @@ from jarvis.core.llm import LLMClient
 from jarvis.gui import theme
 from jarvis.gui.views.video_editor.ai_assistant_panel import AiAssistantPanel
 from jarvis.gui.views.video_editor.captions_panel import CaptionsPanel
+from jarvis.gui.views.video_editor.element_inspector_panel import ElementInspectorPanel
 from jarvis.gui.views.video_editor.export_panel import ExportPanel
 from jarvis.gui.views.video_editor.import_panel import ImportPanel
-from jarvis.gui.views.video_editor.live_preview_panel import LivePreviewPanel
-from jarvis.gui.views.video_editor.multitrack_view import MultiTrackView
+from jarvis.gui.views.video_editor.interactive_preview_panel import InteractivePreviewPanel
+from jarvis.gui.views.video_editor.looks_panel import FiltersPanel, TransitionsPanel
 from jarvis.gui.views.video_editor.music_panel import MusicPanel
 from jarvis.gui.views.video_editor.reel_templates_panel import ReelTemplatesPanel
 from jarvis.gui.views.video_editor.stickers_panel import StickersPanel
 from jarvis.gui.views.video_editor.speech_sync_panel import SpeechSyncPanel
 from jarvis.gui.views.video_editor.text_overlay_panel import TextOverlayPanel
 from jarvis.gui.views.video_editor.timeline_panel import TimelinePanel
+from jarvis.gui.views.video_editor.track_timeline_panel import TrackTimelinePanel
 from jarvis.gui.widgets import Card, SectionHeader
 from jarvis.gui.worker import (
     CancelableTaskResult,
@@ -51,7 +57,9 @@ from jarvis.gui.worker import (
     run_cancelable_in_background,
     run_generation_in_background,
 )
-from jarvis.video_editor import db, media_import, multisource_export as mse, storage
+from jarvis.video_editor import db, media_import, multisource_export as mse, playback, storage
+from jarvis.video_editor import preview_compositor as pc
+from jarvis.video_editor import track_layout
 from jarvis.video_editor.audio_mixing import AudioMixingError, MusicTrack, build_music_mix_filter
 from jarvis.video_editor.captions import (
     CaptionError,
@@ -64,39 +72,59 @@ from jarvis.video_editor.captions import (
     group_words_into_lines,
 )
 from jarvis.video_editor.ai_assistant import AiReelProposal, propose_reel_style
+from jarvis.video_editor.editor_state import EditorHistory, EditorState
 from jarvis.video_editor.live_preview import LivePreviewError, PreviewFilters, render_preview_frame
 from jarvis.video_editor.media_import import MediaImportError, MediaItem
 from jarvis.video_editor.multisource_export import MultiSourceExportError
 from jarvis.video_editor.reel_templates import ReelTemplate, apply_template
 from jarvis.video_editor.storage import VideoEditorProject
 from jarvis.video_editor.stickers import StickerError, StickerInstance, build_sticker_filter
-from jarvis.video_editor.text_overlay import TextOverlay, TextOverlayError, build_text_overlay_filter
+from jarvis.video_editor.text_overlay import (
+    TextOverlay,
+    TextOverlayError,
+    build_rotated_text_filters,
+    build_text_overlay_filter,
+    text_scale_for,
+)
 from jarvis.video_editor.timeline import Timeline, TimelineClip, TimelineStill, apply_effect_to_every_item
 from jarvis.video_studio.ffmpeg_utils import ffmpeg_available
 
-_QUEUE_POLL_INTERVAL_MS = 100
+_QUEUE_POLL_INTERVAL_MS = 30
+# 30 ms (was 100): background results include the live preview's
+# decoded frames while scrubbing, and every poll interval of delay is
+# visible lag there. Draining an empty queue costs nothing.
 _RECENT_PROJECTS_LIMIT = 12
-_LIVE_PREVIEW_DEBOUNCE_MS = 350
-# Long enough that a fast scrub-slider drag or rapid style-field typing
-# collapses into one real render after the person pauses, short enough
-# that the preview still feels responsive (not a fixed "wait N seconds
-# no matter what" delay - any further event within this window resets
-# the timer via after_cancel(), so a continuous drag never renders until
-# the person actually stops moving the slider).
+_EXACT_FRAME_DELAY_MS = 900
+# How long the preview must sit still (paused, no edits) before the
+# exact export frame is rendered with ffmpeg - long enough that
+# scrubbing or dragging never queues an export render per mouse event.
+_BASE_FRAME_DEBOUNCE_MS = 40
+_PLAYBACK_TICK_MS = 15
+_OVERLAY_SAVE_DELAY_MS = 400
+_PREVIEW_AUDIO_DELAY_MS = 600
+_PREVIEW_CANVAS_TIER = "1080p"
+_LIBRARY_WIDTH = 440
+_INSPECTOR_WIDTH = 290
+_TRACKS_HEIGHT = 280
+# Overlay sizes are 1080p pixels (text_overlay.REFERENCE_SHORT_SIDE_PX),
+# so the preview measures everything against the 1080p canvas.
 
 _CATEGORIES: tuple[tuple[str, str], ...] = (
     ("clips", "🎬 Klipai"),
     ("animations", "✨ Animacijos"),
-    ("stickers", "🎉 Lipdukai, GIF ir Emoji"),
+    ("stickers", "🎉 Lipdukai"),
     ("transitions", "🔀 Perėjimai"),
-    ("text", "📝 Tekstas ir subtitrai"),
-    ("filters", "🎨 Filtrai ir spalvos"),
-    ("music", "🎵 Muzika ir garsas"),
-    ("format", "📐 Formatas ir apkarpymas"),
-    ("templates", "🎞️ Reels šablonai"),
-    ("ai_assistant", "🤖 AI asistentas"),
+    ("text", "📝 Tekstas"),
+    ("filters", "🎨 Filtrai"),
+    ("music", "🎵 Muzika"),
+    ("format", "📐 Formatas"),
+    ("templates", "🎞️ Šablonai"),
+    ("ai_assistant", "🤖 AI"),
     ("export", "📤 Eksportas"),
 )
+# Short labels: the categories are now a narrow strip at the left edge
+# of the library column ("Lipdukai" = stickers, GIFs and emoji; "Tekstas"
+# = text and subtitles; "Filtrai" = filters and colors).
 # "Lipdukai, GIF ir Emoji" covers both the user's own separate
 # "Lipdukai ir GIF" and "Emoji" category requests - a sticker IS the
 # generalized mechanism an emoji would also use (a small transparent
@@ -119,12 +147,12 @@ _CATEGORIES: tuple[tuple[str, str], ...] = (
 # content area, so no state (a project's open Timeline, an in-progress
 # edit) is ever lost by changing category.
 _CATEGORY_PANEL_ATTRS: dict[str, tuple[str, ...]] = {
-    "clips": ("_multitrack_view", "_import_panel", "_timeline_panel"),
+    "clips": ("_import_panel", "_timeline_panel"),
     "animations": ("_timeline_panel",),
     "stickers": ("_stickers_panel",),
-    "transitions": ("_timeline_panel",),
+    "transitions": ("_transitions_panel", "_timeline_panel"),
     "text": ("_captions_panel", "_text_overlay_panel", "_speech_sync_panel"),
-    "filters": ("_timeline_panel",),
+    "filters": ("_filters_panel", "_timeline_panel"),
     "music": ("_music_panel",),
     "format": ("_timeline_panel",),
     "templates": ("_reel_templates_panel",),
@@ -151,55 +179,105 @@ class VideoEditorView(ctk.CTkFrame):
         self._pending_export_resolution_tier: str = "1080p"
         self._live_preview_render_after_id: str | None = None
         self._preview_request_token: int = 0
-
-        SectionHeader(self, "Video Editor").pack(
-            anchor="w", padx=theme.SPACE_LG, pady=(theme.SPACE_LG, theme.SPACE_SM),
-        )
-
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=theme.SPACE_LG, pady=(0, theme.SPACE_LG))
+        self._last_exact_frame_path: Path | None = None
+        self._engine: playback.PlaybackEngine | None = None
+        self._audio_player = playback.AudioPlayer()
+        self._playback_after_id: str | None = None
+        self._base_frame_after_id: str | None = None
+        self._base_frame_token = 0
+        self._overlay_save_after_id: str | None = None
+        self._audio_after_id: str | None = None
+        self._audio_token = 0
+        self._panel_sync_originals: dict[tuple[str, int], object] = {}
+        self._history = EditorHistory()
+        self._applying_state = False
+        self._history_batch_depth = 0
+        self._selection: tuple[str, int] | None = None
+        self.bind("<Destroy>", self._on_destroy, add="+")
 
         if not ffmpeg_available():
+            SectionHeader(self, "Video Editor").pack(
+                anchor="w", padx=theme.SPACE_LG, pady=(theme.SPACE_LG, theme.SPACE_SM),
+            )
+            body = ctk.CTkFrame(self, fg_color="transparent")
+            body.pack(fill="both", expand=True, padx=theme.SPACE_LG, pady=(0, theme.SPACE_LG))
             self._scroll = ctk.CTkScrollableFrame(body, fg_color="transparent")
             self._scroll.pack(fill="both", expand=True)
             self._render_ffmpeg_missing()
             self._poll_queue()
             return
 
-        self._category_sidebar = ctk.CTkFrame(body, fg_color="transparent", width=200)
-        self._category_sidebar.pack(side="left", fill="y", padx=(0, theme.SPACE_MD))
+        # Layout (top to bottom): project bar with undo/redo and save
+        # state; then three resizable columns - the library of tools on
+        # the left, the live preview in the center, the selected
+        # element's settings on the right; and the multi-track timeline
+        # across the bottom. The dividers between them can be dragged.
+        self._build_project_bar()
+        self._status_container = ctk.CTkFrame(self, fg_color="transparent", height=1)
+        # Packed only while there is a message (see _set_status()).
+
+        self._vertical_panes = tk.PanedWindow(
+            self, orient="vertical", sashwidth=6, bd=0, bg=theme.BG_PRIMARY, sashrelief="flat",
+        )
+        self._vertical_panes.pack(fill="both", expand=True, padx=theme.SPACE_SM, pady=(0, theme.SPACE_SM))
+        self._columns = tk.PanedWindow(
+            self._vertical_panes, orient="horizontal", sashwidth=6, bd=0, bg=theme.BG_PRIMARY, sashrelief="flat",
+        )
+
+        library = ctk.CTkFrame(self._columns, fg_color="transparent")
+        self._category_sidebar = ctk.CTkFrame(library, fg_color="transparent", width=118)
+        self._category_sidebar.pack(side="left", fill="y", padx=(0, theme.SPACE_XS))
         self._category_sidebar.pack_propagate(False)
         self._category_buttons: dict[str, ctk.CTkButton] = {}
         self._active_category = "clips"
         for key, label in _CATEGORIES:
             button = ctk.CTkButton(
-                self._category_sidebar, text=label, anchor="w", command=lambda k=key: self._on_category_selected(k),
+                self._category_sidebar, text=label, anchor="w", height=30,
+                command=lambda k=key: self._on_category_selected(k),
             )
             button.pack(fill="x", pady=(0, theme.SPACE_XS))
             self._category_buttons[key] = button
+        self._scroll = ctk.CTkScrollableFrame(library, fg_color="transparent")
+        self._scroll.pack(side="left", fill="both", expand=True)
 
-        content = ctk.CTkFrame(body, fg_color="transparent")
-        content.pack(side="left", fill="both", expand=True)
+        center = ctk.CTkFrame(self._columns, fg_color="transparent")
+        self._preview_panel = InteractivePreviewPanel(
+            center, on_play_toggled=self._on_play_toggled, on_seek=self._on_preview_seek,
+            on_selection_changed=self._on_preview_selection_changed, on_element_edited=self._on_element_edited,
+            on_delete_requested=self._on_element_delete_requested, on_stop=self._on_stop_clicked,
+        )
+        self._preview_panel.pack(fill="both", expand=True)
 
-        # Live Preview is ALWAYS visible regardless of which category
-        # tab is active (packed here, outside the per-category
-        # show/hide switching _on_category_selected() does below) -
-        # the whole point of "redaguojant iškart matyti rezultatą" (see
-        # a result immediately while editing) is that it stays on
-        # screen no matter which tool the person is currently using
-        # (text, stickers, timeline, templates...), not just one
-        # specific tab.
-        self._live_preview_panel = LivePreviewPanel(content, on_timestamp_changed=self._on_preview_timestamp_changed)
-        self._live_preview_panel.pack(fill="x", padx=theme.SPACE_LG, pady=(0, theme.SPACE_SM))
+        right = ctk.CTkFrame(self._columns, fg_color="transparent")
+        inspector_column = ctk.CTkScrollableFrame(right, fg_color="transparent")
+        inspector_column.pack(fill="both", expand=True)
+        self._inspector_panel = ElementInspectorPanel(
+            inspector_column, on_element_edited=self._on_element_edited,
+            on_delete_requested=self._on_element_delete_requested,
+            on_duplicate_requested=self._on_element_duplicate_requested,
+            on_layer_requested=self._on_layer_requested,
+        )
+        self._inspector_panel.pack(fill="both", expand=True)
+        add_row = ctk.CTkFrame(inspector_column, fg_color="transparent")
+        add_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
+        ctk.CTkButton(add_row, text="➕ Tekstas", width=110, command=self._on_quick_add_text).pack(
+            side="left", padx=(0, theme.SPACE_XS),
+        )
+        ctk.CTkButton(add_row, text="➕ Lipdukas", width=110, command=self._on_quick_add_sticker).pack(side="left")
 
-        self._scroll = ctk.CTkScrollableFrame(content, fg_color="transparent")
-        self._scroll.pack(fill="both", expand=True)
+        self._columns.add(library, minsize=300, width=_LIBRARY_WIDTH, stretch="never")
+        self._columns.add(center, minsize=240, stretch="always")
+        self._columns.add(right, minsize=220, width=_INSPECTOR_WIDTH, stretch="never")
 
-        self._build_project_bar()
-        self._status_container = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        self._status_container.pack(fill="x", pady=(theme.SPACE_SM, 0))
-
-        self._multitrack_view = MultiTrackView(self._scroll)
+        self._track_timeline = TrackTimelinePanel(
+            self._vertical_panes, on_seek=self._on_preview_seek, on_selection_changed=self._on_track_selection_changed,
+            on_state_edited=self._on_track_state_edited,
+        )
+        self._columns_user_sized = False
+        self._columns.bind("<Configure>", self._on_columns_configured, add="+")
+        self._columns.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_columns_user_sized", True), add="+")
+        self._vertical_panes.add(self._columns, minsize=320, stretch="always")
+        self._vertical_panes.add(self._track_timeline, minsize=170, height=_TRACKS_HEIGHT, stretch="never")
 
         self._import_panel = ImportPanel(
             self._scroll, on_files_chosen=self._on_files_chosen, on_add_to_timeline=self._on_add_to_timeline_clicked,
@@ -208,6 +286,16 @@ class VideoEditorView(ctk.CTkFrame):
         self._timeline_panel = TimelinePanel(
             self._scroll, on_timeline_changed=self._on_timeline_changed, get_thumbnail=self._get_thumbnail,
             on_preview_requested=self._on_effect_preview_requested,
+            on_undo_requested=self._on_undo, on_redo_requested=self._on_redo,
+        )
+
+        self._filters_panel = FiltersPanel(
+            self._scroll, on_look_chosen=self._on_look_chosen, on_intensity_changed=self._on_look_intensity_changed,
+            on_apply_all=self._on_look_apply_all, render_previews=playback.render_look_previews,
+        )
+        self._transitions_panel = TransitionsPanel(
+            self._scroll, on_transition_chosen=self._on_transition_chosen,
+            on_duration_changed=self._on_transition_duration_changed, on_apply_all=self._on_transition_apply_all,
         )
 
         self._captions_panel = CaptionsPanel(
@@ -221,7 +309,9 @@ class VideoEditorView(ctk.CTkFrame):
 
         self._speech_sync_panel = SpeechSyncPanel(self._scroll, get_words=lambda: self._last_transcribed_words)
 
-        self._stickers_panel = StickersPanel(self._scroll, on_stickers_changed=self._on_stickers_changed)
+        self._stickers_panel = StickersPanel(
+            self._scroll, on_stickers_changed=self._on_stickers_changed, on_shape_dragged=self._on_sticker_dragged,
+        )
 
         self._music_panel = MusicPanel(
             self._scroll, on_file_chosen=self._on_music_file_chosen, on_track_changed=self._on_music_track_changed,
@@ -244,6 +334,8 @@ class VideoEditorView(ctk.CTkFrame):
         self._set_project_controls_enabled(False)
         self._render_recent_projects()
         self._on_category_selected(self._active_category)
+        self._update_history_controls()
+        self._bind_shortcuts()
         self._poll_queue()
 
     def _on_category_selected(self, category: str) -> None:
@@ -260,7 +352,7 @@ class VideoEditorView(ctk.CTkFrame):
             button.configure(fg_color=theme.ACCENT_PRIMARY if key == category else theme.BG_CARD)
 
         all_panels = (
-            self._multitrack_view, self._import_panel, self._timeline_panel, self._captions_panel,
+            self._import_panel, self._filters_panel, self._transitions_panel, self._timeline_panel, self._captions_panel,
             self._text_overlay_panel, self._speech_sync_panel, self._stickers_panel, self._music_panel,
             self._reel_templates_panel, self._ai_assistant_panel, self._export_panel,
         )
@@ -272,6 +364,20 @@ class VideoEditorView(ctk.CTkFrame):
             getattr(self, attr).pack(fill="x", pady=(theme.SPACE_SM, 0))
         if category == "clips":
             self._recent_projects_container.pack(fill="x", pady=(theme.SPACE_LG, 0))
+        # Start each tool at its top - a scroll position left over from a
+        # longer tool would otherwise show an empty area.
+        self._scroll._parent_canvas.yview_moveto(0.0)
+
+    def _on_columns_configured(self, event) -> None:
+        """Splits the width between the columns: the library gets about
+        a third (its tools are wide), the settings a fixed column, the
+        preview the rest - until the person drags a divider, after which
+        the dividers stay where they put them."""
+        if self._columns_user_sized or event.width < 600:
+            return
+        library = max(_LIBRARY_WIDTH, min(640, round(event.width * 0.38)))
+        self._columns.sash_place(0, library, 0)
+        self._columns.sash_place(1, event.width - _INSPECTOR_WIDTH, 0)
 
     def _render_ffmpeg_missing(self) -> None:
         card = Card(self._scroll)
@@ -285,15 +391,44 @@ class VideoEditorView(ctk.CTkFrame):
     # --- project lifecycle -----------------------------------------------------------------
 
     def _build_project_bar(self) -> None:
-        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        row.pack(fill="x")
-        ctk.CTkButton(row, text="➕ New Project", command=self._on_new_project_clicked, width=150).pack(side="left")
+        row = ctk.CTkFrame(self, fg_color=theme.BG_SURFACE, corner_radius=0)
+        row.pack(fill="x", pady=(0, theme.SPACE_SM))
+        inner = ctk.CTkFrame(row, fg_color="transparent")
+        inner.pack(fill="x", padx=theme.SPACE_MD, pady=theme.SPACE_SM)
+        ctk.CTkLabel(
+            inner, text="🎛️ Video Editor",
+            font=ctk.CTkFont(family=theme.FONT_FAMILY, size=theme.FONT_SIZE_SUBTITLE, weight="bold"),
+            text_color=theme.TEXT_PRIMARY,
+        ).pack(side="left", padx=(0, theme.SPACE_MD))
+        ctk.CTkButton(inner, text="➕ Naujas projektas", command=self._on_new_project_clicked, width=150).pack(
+            side="left",
+        )
         self._project_name_label = ctk.CTkLabel(
-            row, text="No project open",
+            inner, text="Projektas neatidarytas",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),
             text_color=theme.TEXT_MUTED, anchor="w",
         )
         self._project_name_label.pack(side="left", padx=(theme.SPACE_MD, 0))
+
+        button_style = dict(
+            fg_color=theme.BG_CARD, hover_color=theme.BG_CARD_HOVER, border_width=1, border_color=theme.BORDER_SUBTLE,
+        )
+        ctk.CTkButton(
+            inner, text="📤 Eksportuoti", width=120, command=lambda: self._on_category_selected("export"),
+        ).pack(side="right")
+        self._save_label = ctk.CTkLabel(
+            inner, text="", font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_CAPTION),
+            text_color=theme.TEXT_MUTED,
+        )
+        self._save_label.pack(side="right", padx=theme.SPACE_MD)
+        self._redo_button = ctk.CTkButton(
+            inner, text="↪ Grąžinti", width=100, command=self._on_redo, **button_style,
+        )
+        self._redo_button.pack(side="right", padx=(theme.SPACE_XS, 0))
+        self._undo_button = ctk.CTkButton(
+            inner, text="↩ Atšaukti", width=100, command=self._on_undo, **button_style,
+        )
+        self._undo_button.pack(side="right")
 
     def _on_new_project_clicked(self) -> None:
         project = storage.create_project()
@@ -305,16 +440,51 @@ class VideoEditorView(ctk.CTkFrame):
         if record is None:
             self._set_status(f"Project {project_id} could no longer be found.", kind="error")
             return
+        self._stop_playback()
         self._current_project = storage.project_paths(project_id)
         timeline, media_items = storage.load_project(project_id)
         self._media_items = media_items
         self._timeline_panel.render(timeline or Timeline(), media_items)
         self._import_panel.render_media_list(media_items)
-        self._project_name_label.configure(text=record.name)
+        self._restore_overlays(storage.load_overlays(project_id))
+        self._project_name_label.configure(text=record.name, text_color=theme.TEXT_PRIMARY)
         self._set_project_controls_enabled(True)
         self._clear_status()
         self._render_recent_projects()
-        self._refresh_multitrack_view()
+        self._set_selection(None)
+        self._history.reset(self._editor_state())
+        self._update_history_controls()
+        self._refresh_track_timeline()
+        self._on_timeline_for_preview_changed()
+        self._save_label.configure(text="💾 Išsaugoma automatiškai")
+
+    def _restore_overlays(self, overlays: storage.ProjectOverlays) -> None:
+        """Puts a reopened project's saved text/stickers/captions/music
+        back into the dashboard AND into their panels - before the
+        overlays_data column existed, none of this survived a reopen.
+        Also clears whatever the previously open project left behind."""
+        self._text_overlays = list(overlays.text_overlays)
+        self._text_overlay_panel.set_overlays(self._text_overlays)
+        self._stickers = list(overlays.stickers)
+        self._stickers_panel.set_stickers(self._stickers)
+        self._panel_sync_originals.clear()
+
+        self._captions_panel.reset()
+        self._caption_style = None
+        self._caption_lines = None
+        if overlays.caption_style is not None:
+            self._captions_panel.apply_style(overlays.caption_style)  # emits -> _on_caption_style_changed
+            self._caption_style = overlays.caption_style
+        if overlays.caption_lines is not None:
+            self._captions_panel.set_lines(list(overlays.caption_lines))
+            self._caption_lines = list(overlays.caption_lines)
+
+        track = overlays.music_track
+        if track is not None and track.source_path.is_file():
+            self._music_panel.set_imported_track(track.source_path, duration_seconds=None, track=track)
+        else:
+            self._music_panel.clear_track()
+            self._music_track = None
 
     def open_project(self, project_id: str | None) -> None:
         """Duck-typed hook jarvis.gui.app._navigate() calls optionally
@@ -388,80 +558,567 @@ class VideoEditorView(ctk.CTkFrame):
         if self._current_project is None:
             return
         storage.save_project(self._current_project.project_id, timeline, self._media_items)
-        self._refresh_multitrack_view()
+        self._mark_saved()
+        self._record_history("Laiko juosta")
+        self._refresh_track_timeline()
+        self._sync_inspector_with_selection()
+        self._on_timeline_for_preview_changed()
 
-    def _refresh_multitrack_view(self) -> None:
-        """Recomputes every track's own segments from state this
-        dashboard already holds (Timeline items, MusicTrack,
-        CaptionLines, TextOverlays) and redraws MultiTrackView - a pure
-        read-only visualization, never itself a source of truth (see
-        that widget's own docstring). Called after every action that
-        changes any of those four pieces of state."""
-        timeline = self._timeline_panel.timeline
-        total_duration = timeline.total_duration_seconds()
+    def _refresh_track_timeline(self) -> None:
+        """Redraws the track timeline from the current state."""
+        self._track_timeline.render(self._editor_state(), self._media_items)
 
-        video_segments: list[tuple[float, float, str]] = []
-        cursor = 0.0
-        for index, item in enumerate(timeline.items):
-            duration = item.on_screen_duration_seconds
-            video_segments.append((cursor, cursor + duration, str(index + 1)))
-            cursor += duration
+    # --- live preview: playback ------------------------------------------------------------------
 
-        music_segment = None
-        if self._music_track is not None:
-            music_segment = (0.0, total_duration)
+    def _preview_formats(self) -> tuple[mse.ExportFormat, tuple[int, int]]:
+        """(the 1080p export canvas overlays are measured against, the
+        decoded preview frame size) for the current aspect ratio."""
+        canvas = mse.resolve_export_format(self._timeline_panel.timeline.aspect_ratio, _PREVIEW_CANVAS_TIER)
+        return canvas, playback.preview_size(canvas)
 
-        caption_segments: list[tuple[float, float]] = []
-        if self._caption_lines:
-            caption_segments = [(line.start_seconds, line.end_seconds) for line in self._caption_lines]
-
-        text_segments = [(overlay.start_seconds, overlay.end_seconds) for overlay in self._text_overlays]
-        sticker_segments = [(sticker.start_seconds, sticker.end_seconds) for sticker in self._stickers]
-
-        self._multitrack_view.render(
-            video_segments=video_segments, music_segment=music_segment,
-            caption_segments=caption_segments, text_segments=text_segments, sticker_segments=sticker_segments,
-            total_duration_seconds=total_duration,
-        )
-
-        self._live_preview_panel.set_total_duration(total_duration)
-        self._request_live_preview_render()
-
-    # --- live preview --------------------------------------------------------------------------
-
-    def _on_preview_timestamp_changed(self, _timestamp_seconds: float) -> None:
-        """LivePreviewPanel's own scrub-slider callback - the slider
-        already updated its own `current_timestamp_seconds()`, this
-        just triggers a (debounced) re-render for the new position."""
-        self._request_live_preview_render()
-
-    def _request_live_preview_render(self) -> None:
-        """Debounces real preview renders - dragging the scrub slider
-        or typing into a style field can fire this many times per
-        second, but each render is a real ffmpeg subprocess call; without
-        debouncing, a fast drag would queue dozens of redundant renders
-        and the displayed frame would lag far behind the slider.
-        `after_cancel()` on a still-pending request is the same
-        established debounce pattern used elsewhere in this codebase
-        for exactly this reason (rapid repeated UI events collapsing
-        into the LAST one before any real work starts)."""
-        if self._current_project is None or not self._timeline_panel.timeline.items:
-            return  # LivePreviewPanel.set_total_duration(0) already shows its own placeholder for this case
-        if self._live_preview_render_after_id is not None:
-            self.after_cancel(self._live_preview_render_after_id)
-        self._live_preview_render_after_id = self.after(_LIVE_PREVIEW_DEBOUNCE_MS, self._run_live_preview_render)
-
-    def _run_live_preview_render(self) -> None:
-        self._live_preview_render_after_id = None
+    def _on_timeline_for_preview_changed(self) -> None:
+        """The timeline (clips, trims, effects, aspect ratio) changed -
+        re-point playback at it, redraw the paused frame, and rebuild
+        the preview audio."""
         if self._current_project is None:
             return
         timeline = self._timeline_panel.timeline
-        if not timeline.items:
+        canvas, frame_size = self._preview_formats()
+        self._preview_panel.configure_canvas(frame_size=frame_size, canvas_size=(canvas.width, canvas.height))
+        if self._engine is None or self._engine.frame_size != frame_size:
+            if self._engine is not None:
+                self._engine.close()
+            self._engine = playback.PlaybackEngine(
+                timeline, self._media_items, frame_size=frame_size, audio=self._audio_player,
+            )
+        else:
+            self._engine.set_timeline(timeline, self._media_items)
+        self._show_time(self._engine.position, self._engine.duration)
+        self._preview_panel.update_scene(self._current_scene())
+        self._request_preview_audio()
+        if self._engine.playing:
+            self._schedule_playback_tick()
+        else:
+            self._request_base_frame()
+
+    def _show_time(self, t: float, duration: float, *, playing: bool = False) -> None:
+        self._preview_panel.set_time(t, duration)
+        self._track_timeline.set_playhead(t, follow=playing)
+
+    def _on_play_toggled(self) -> None:
+        engine = self._engine
+        if engine is None or engine.duration <= 0:
+            return
+        engine.toggle()
+        self._preview_panel.set_playing(engine.playing)
+        if engine.playing:
+            self._cancel_exact_frame()
+            if not self._audio_player.available:
+                self._preview_panel.show_error("Garso nėra: nerastas ffplay (įdiekite pilną FFmpeg paketą).")
+            self._schedule_playback_tick()
+        else:
+            self._request_base_frame()
+
+    def _schedule_playback_tick(self) -> None:
+        if self._playback_after_id is None:
+            self._playback_after_id = self.after(_PLAYBACK_TICK_MS, self._playback_tick)
+
+    def _playback_tick(self) -> None:
+        self._playback_after_id = None
+        engine = self._engine
+        if engine is None:
+            return
+        frame = engine.tick()
+        if frame is not None:
+            self._preview_panel.show_base(frame, engine.position)
+        self._show_time(engine.position, engine.duration, playing=engine.playing)
+        if engine.playing:
+            self._schedule_playback_tick()
+        else:  # reached the end
+            self._preview_panel.set_playing(False)
+            self._request_base_frame()
+
+    def _stop_playback(self) -> None:
+        if self._engine is not None:
+            self._engine.pause()
+            self._preview_panel.set_playing(False)
+        if self._playback_after_id is not None:
+            self.after_cancel(self._playback_after_id)
+            self._playback_after_id = None
+
+    def _on_stop_clicked(self) -> None:
+        self._stop_playback()
+        self._on_preview_seek(0.0)
+
+    def _on_preview_seek(self, t: float) -> None:
+        engine = self._engine
+        if engine is None:
+            return
+        engine.seek(t)
+        self._show_time(engine.position, engine.duration, playing=engine.playing)
+        if self._selection is None or self._selection[0] != "clip":
+            self._refresh_look_panels()
+        if not engine.playing:
+            self._cancel_exact_frame()
+            self._request_base_frame()
+
+    def _request_base_frame(self) -> None:
+        """Decodes the paused frame at the current position (debounced,
+        so a slider drag decodes only where the pointer rests)."""
+        if self._base_frame_after_id is not None:
+            self.after_cancel(self._base_frame_after_id)
+        self._base_frame_after_id = self.after(_BASE_FRAME_DEBOUNCE_MS, self._run_base_frame_decode)
+
+    def _run_base_frame_decode(self) -> None:
+        self._base_frame_after_id = None
+        engine = self._engine
+        if engine is None or engine.duration <= 0 or engine.playing:
+            return
+        timeline, media_items = self._timeline_panel.timeline, dict(self._media_items)
+        t = engine.position
+        width, height = engine.frame_size
+        self._base_frame_token += 1
+        token = self._base_frame_token
+        run_generation_in_background(
+            lambda: playback.decode_single_frame(timeline, media_items, t=t, width=width, height=height),
+            self._result_queue, source=("base_frame", token, t),
+        )
+
+    def _handle_base_frame_result(self, token: int, t: float, result: GenerationTaskResult) -> None:
+        if token != self._base_frame_token or (self._engine is not None and self._engine.playing):
+            return  # superseded by a newer seek, or playback started meanwhile
+        if result.error:
+            self._preview_panel.show_error(result.error)
+            return
+        self._preview_panel.show_base(result.value, t)
+        self._schedule_exact_frame()
+
+    def _request_preview_audio(self) -> None:
+        """(Re)builds the WAV the preview plays along - after a timeline
+        or music change, debounced. Playback is silent until it's ready
+        rather than playing audio that no longer matches the video."""
+        if self._current_project is None or not self._audio_player.available:
+            return
+        if self._engine is not None:
+            self._engine.set_audio_file(None)
+        if self._audio_after_id is not None:
+            self.after_cancel(self._audio_after_id)
+        self._audio_after_id = self.after(_PREVIEW_AUDIO_DELAY_MS, self._run_preview_audio_render)
+
+    def _run_preview_audio_render(self) -> None:
+        self._audio_after_id = None
+        if self._current_project is None:
+            return
+        timeline = self._timeline_panel.timeline
+        if not timeline.items or timeline.validate():
+            return
+        media_items = dict(self._media_items)
+        cwd = self._current_project.exports_dir
+        track = self._music_track
+        self._audio_token += 1
+        token = self._audio_token
+        output_path = cwd / f"_preview_audio_{token}.wav"
+
+        def music_builder(input_count: int, duration: float):
+            if track is None:
+                return None
+            return build_music_mix_filter(
+                track, timeline_duration_seconds=duration, cwd=cwd, timeline_audio_input_count=input_count,
+            )
+
+        run_generation_in_background(
+            lambda: playback.render_preview_audio(
+                timeline, media_items, output_path=output_path, cwd=cwd, audio_mix_builder=music_builder,
+            ),
+            self._result_queue, source=("preview_audio", token),
+        )
+
+    def _handle_preview_audio_result(self, token: int, result: GenerationTaskResult) -> None:
+        if result.error or token != self._audio_token or self._engine is None:
+            return
+        self._engine.set_audio_file(result.value)
+        for old in result.value.parent.glob("_preview_audio_*.wav"):
+            if old != result.value:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass  # still open in a just-stopped ffplay on Windows - removed next time
+
+    def _on_destroy(self, event) -> None:
+        if event.widget is not self:
+            return
+        if self._engine is not None:
+            self._engine.close()
+        self._audio_player.stop()
+
+    # --- live preview: overlays, selection, interactive editing --------------------------------
+
+    def _current_scene(self) -> pc.Scene:
+        lines = None
+        if self._caption_style is not None and self._caption_lines:
+            lines = tuple(self._caption_lines)
+        return pc.Scene(
+            text_overlays=tuple(self._text_overlays), stickers=tuple(self._stickers),
+            caption_style=self._caption_style, caption_lines=lines,
+        )
+
+    def _on_scene_changed(self) -> None:
+        """Any overlay (text, sticker, caption) changed: redraw the
+        preview right away, then save and re-render the exact frame."""
+        self._preview_panel.update_scene(self._current_scene())
+        self._sync_inspector_with_selection()
+        self._schedule_exact_frame()
+        self._schedule_overlay_save()
+
+    def _items_for(self, kind: str) -> list:
+        return self._text_overlays if kind == "text" else self._stickers
+
+    def _sync_inspector_with_selection(self) -> None:
+        """Shows the selected element's settings (or none)."""
+        self._refresh_look_panels()
+        ref = self._selection
+        if ref is not None:
+            kind, index = ref
+            if kind in ("text", "sticker"):
+                items = self._items_for(kind)
+                if 0 <= index < len(items):
+                    self._inspector_panel.show_element(kind, index, items[index])
+                    return
+            elif kind == "clip":
+                items = self._timeline_panel.timeline.items
+                if 0 <= index < len(items):
+                    media = self._media_items.get(items[index].media_item_id)
+                    title = media.original_filename if media is not None else ""
+                    max_transition = None
+                    if index < len(items) - 1:
+                        max_transition = track_layout.max_transition_seconds(self._editor_state(), index)
+                    self._inspector_panel.show_element(
+                        "clip", index, items[index], title=title, max_transition=max_transition,
+                    )
+                    return
+            self._selection = None
+        if self._inspector_panel.shown is not None:
+            self._inspector_panel.show_nothing()
+
+    def _set_selection(self, ref: tuple[str, int] | None) -> None:
+        """One selection shared by the preview, the track timeline and
+        the settings panel ("text"/"sticker"/"clip", index)."""
+        self._selection = ref
+        if ref is None or ref[0] in ("text", "sticker"):
+            self._preview_panel.select(ref)
+        else:
+            self._preview_panel.select(None)
+        track_ref = None
+        if ref is not None:
+            track_ref = ({"text": "text", "sticker": "stickers", "clip": "video"}[ref[0]], ref[1])
+        self._track_timeline.select(track_ref)
+        self._sync_inspector_with_selection()
+
+    def _on_preview_selection_changed(self, ref: tuple[str, int] | None) -> None:
+        self._set_selection(ref)
+
+    def _on_track_selection_changed(self, ref: tuple[str, int] | None) -> None:
+        """A bar was clicked on the track timeline."""
+        if ref is None:
+            self._set_selection(None)
+            return
+        track, index = ref
+        if track in ("text", "stickers"):
+            kind = "text" if track == "text" else "sticker"
+            self._set_selection((kind, index))
+            element = self._items_for(kind)[index]
+            # Make sure it's on screen in the preview so it can be dragged there too.
+            if self._engine is not None and not (element.start_seconds <= self._engine.position < element.end_seconds):
+                self._on_preview_seek(element.start_seconds)
+        elif track in ("video", "effects", "sound"):
+            self._set_selection(("clip", index))
+            if track == "effects":
+                self._on_category_selected("filters")
+        else:
+            self._set_selection(None)
+            self._track_timeline.select(ref)
+            self._on_category_selected("music" if track == "audio" else "text")
+
+    # --- filters and transitions (library panels) -------------------------------------------
+
+    def _look_target(self) -> int | None:
+        """The clip the Filters/Transitions panels apply to: the
+        selected clip, else the one under the playhead."""
+        items = self._timeline_panel.timeline.items
+        if not items:
+            return None
+        if self._selection is not None and self._selection[0] == "clip" and 0 <= self._selection[1] < len(items):
+            return self._selection[1]
+        position = self._engine.position if self._engine is not None else 0.0
+        segments = playback.timeline_segments(self._timeline_panel.timeline, self._media_items)
+        for segment in segments:
+            if segment.start_seconds <= position < segment.end_seconds:
+                return segment.index
+        return segments[-1].index if segments else 0
+
+    def _refresh_look_panels(self) -> None:
+        if not hasattr(self, "_filters_panel"):
+            return
+        index = self._look_target()
+        if index is None:
+            self._filters_panel.show_target(None, None, None)
+            self._transitions_panel.show_target(None, None, None)
+            return
+        items = self._timeline_panel.timeline.items
+        item = items[index]
+        media = self._media_items.get(item.media_item_id)
+        title = media.original_filename if media is not None else f"#{index + 1}"
+        self._filters_panel.show_target(title, item.effect, self._get_thumbnail(media) if media is not None else None)
+        limit = track_layout.max_transition_seconds(self._editor_state(), index) if index < len(items) - 1 else None
+        self._transitions_panel.show_target(title, item.transition_out, limit)
+
+    def _on_look_chosen(self, look: str) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        effect = self._timeline_panel.timeline.items[index].effect
+        intensity = effect.look_intensity if effect.look != "none" and effect.look_intensity > 0 else 1.0
+        self._apply_editor_state(
+            track_layout.set_look(self._editor_state(), index, look, intensity), label="Filtras",
+        )
+
+    def _on_look_intensity_changed(self, intensity: float, final: bool) -> None:
+        """Applied once the slider rests (each change restarts decoding)."""
+        index = self._look_target()
+        if index is None or not final:
+            return
+        look = self._timeline_panel.timeline.items[index].effect.look
+        self._apply_editor_state(
+            track_layout.set_look(self._editor_state(), index, look, intensity),
+            label="Filtro intensyvumas", coalesce_key=f"look:{index}",
+        )
+
+    def _on_look_apply_all(self) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        effect = self._timeline_panel.timeline.items[index].effect
+        self._apply_editor_state(
+            track_layout.set_look(self._editor_state(), None, effect.look, effect.look_intensity),
+            label="Filtras visiems klipams",
+        )
+
+    def _on_transition_chosen(self, kind: str) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        self._apply_editor_state(
+            track_layout.set_transition(self._editor_state(), index, kind, self._transitions_panel.duration()),
+            label="Perėjimas",
+        )
+
+    def _on_transition_duration_changed(self, duration: float, final: bool) -> None:
+        index = self._look_target()
+        if index is None or not final:
+            return
+        kind = self._timeline_panel.timeline.items[index].transition_out.kind
+        self._apply_editor_state(
+            track_layout.set_transition(self._editor_state(), index, kind, duration),
+            label="Perėjimo trukmė", coalesce_key=f"transition:{index}",
+        )
+
+    def _on_transition_apply_all(self) -> None:
+        index = self._look_target()
+        if index is None:
+            return
+        transition = self._timeline_panel.timeline.items[index].transition_out
+        self._apply_editor_state(
+            track_layout.set_transition_everywhere(self._editor_state(), transition.kind, transition.duration_seconds),
+            label="Perėjimas visiems klipams",
+        )
+
+    def _on_element_edited(self, kind: str, index: int, new_element, final: bool) -> None:
+        """An element was moved/resized/rotated in the preview or
+        changed in the settings panel. Applied immediately on every
+        call; the Text/Stickers panels and the saved project are
+        updated once the edit is final."""
+        if kind == "clip":
+            self._on_clip_edited(index, new_element, final)
+            return
+        items = self._items_for(kind)
+        if not (0 <= index < len(items)):
+            return
+        problems = new_element.validate()
+        if problems:
+            if final:
+                self._set_status(problems[0], kind="error")
+                self._inspector_panel.refresh_values(items[index])
+            return
+        original = self._panel_sync_originals.setdefault((kind, index), items[index])
+        items[index] = new_element
+        self._cancel_exact_frame()
+        self._preview_panel.update_scene(self._current_scene())
+        if self._inspector_panel.shown == (kind, index):
+            self._inspector_panel.refresh_values(new_element)
+        if not final:
+            return
+        del self._panel_sync_originals[(kind, index)]
+        if kind == "text":
+            self._text_overlay_panel.replace_overlay(original, new_element)
+        else:
+            self._stickers_panel.replace_sticker(original, new_element)
+        self._clear_status()
+        self._record_history("Pakeistas elementas", coalesce_key=f"{kind}:{index}")
+        self._refresh_track_timeline()
+        self._schedule_exact_frame()
+        self._schedule_overlay_save()
+
+    def _on_clip_edited(self, index: int, new_item, final: bool) -> None:
+        """A clip/photo setting changed in the settings panel. Applied
+        once final (each change restarts video decoding)."""
+        if not final:
+            return
+        timeline = self._timeline_panel.timeline
+        if not (0 <= index < len(timeline.items)):
+            return
+        items = list(timeline.items)
+        items[index] = new_item
+        new_timeline = dataclasses.replace(timeline, items=tuple(items))
+        problems = [p for p in new_timeline.validate() if p not in timeline.validate()]
+        if problems:
+            self._set_status(problems[0], kind="error")
+            self._inspector_panel.refresh_values(timeline.items[index])
+            return
+        self._clear_status()
+        self._apply_editor_state(
+            dataclasses.replace(self._editor_state(), timeline=new_timeline),
+            label="Klipo nustatymai", coalesce_key=f"clip:{index}",
+        )
+
+    def _on_element_delete_requested(self, kind: str, index: int) -> None:
+        if kind == "clip":
+            self._set_selection(None)
+            self._apply_editor_state(
+                track_layout.delete_element(self._editor_state(), "video", index), label="Ištrintas klipas",
+            )
+            return
+        items = self._items_for(kind)
+        if not (0 <= index < len(items)):
+            return
+        element = items[index]
+        self._set_selection(None)
+        self._panel_sync_originals.pop((kind, index), None)
+        if kind == "text":
+            self._text_overlay_panel.remove_overlay(element)  # emits -> _on_text_overlays_changed
+        else:
+            self._stickers_panel.remove_sticker(element)  # emits -> _on_stickers_changed
+
+    def _on_element_duplicate_requested(self, kind: str, index: int) -> None:
+        if kind == "clip":
+            result = track_layout.duplicate_element(
+                self._editor_state(), "video", index, new_clip_id=uuid.uuid4().hex[:12],
+                total=track_layout.total_duration(self._editor_state(), self._media_items),
+            )
+            if result is not None:
+                new_state, new_index = result
+                self._apply_editor_state(new_state, label="Nukopijuotas klipas")
+                self._set_selection(("clip", new_index))
+            return
+        items = self._items_for(kind)
+        if not (0 <= index < len(items)):
+            return
+        element = items[index]
+        copy = dataclasses.replace(
+            element, x_fraction=min(1.0, element.x_fraction + 0.05), y_fraction=min(1.0, element.y_fraction + 0.05),
+        )
+        self._add_element(kind, copy)
+
+    def _on_layer_requested(self, kind: str, index: int, delta: int) -> None:
+        track = "text" if kind == "text" else "stickers"
+        new_state, new_index = track_layout.reorder_overlay(self._editor_state(), track, index, delta)
+        if new_index == index:
+            self._set_status("Elementas jau " + ("viršuje." if delta > 0 else "apačioje."), kind="muted")
+            return
+        self._apply_editor_state(new_state, label="Sluoksnis")
+        self._set_selection((kind, new_index))
+
+    def _on_quick_add_text(self) -> None:
+        start, end = self._quick_add_window()
+        if end is None:
+            return
+        self._add_element("text", TextOverlay(
+            text="Naujas tekstas", start_seconds=start, end_seconds=end, x_fraction=0.5, y_fraction=0.3,
+        ))
+
+    def _on_quick_add_sticker(self) -> None:
+        start, end = self._quick_add_window()
+        if end is None:
+            return
+        self._add_element("sticker", StickerInstance(
+            start_seconds=start, end_seconds=end, shape="heart", animation="none",
+        ))
+
+    def _on_sticker_dragged(self, shape: str, x_root: int, y_root: int, dropped: bool) -> None:
+        """A sticker dragged from the library: dropping it on the video
+        places it there, at the current time."""
+        fraction = self._preview_panel.fraction_at_root(x_root, y_root)
+        if not dropped:
+            self._preview_panel.show_drop_target(fraction is not None)
+            return
+        self._preview_panel.show_drop_target(False)
+        if fraction is None:
+            return
+        start, end = self._quick_add_window()
+        if end is None:
+            return
+        self._add_element("sticker", StickerInstance(
+            start_seconds=start, end_seconds=end, shape=shape, animation="none",
+            x_fraction=fraction[0], y_fraction=fraction[1],
+        ))
+
+    def _quick_add_window(self) -> tuple[float, float | None]:
+        """A new element starts at the preview's current time and lasts
+        3 s (or to the end of the timeline), so it's visible right away."""
+        if self._current_project is None or self._engine is None or self._engine.duration <= 0:
+            self._set_status("Pirmiausia pridėkite klipą ar nuotrauką į laiko juostą.", kind="error")
+            return 0.0, None
+        duration = self._engine.duration
+        start = min(round(self._engine.position, 2), max(0.0, duration - 0.5))
+        return start, round(min(duration, start + 3.0), 2)
+
+    def _add_element(self, kind: str, element) -> None:
+        if kind == "text":
+            self._text_overlay_panel.add_overlay(element)  # emits -> _on_text_overlays_changed
+        else:
+            self._stickers_panel.add_sticker(element)  # emits -> _on_stickers_changed
+        items = self._items_for(kind)
+        if element in items:
+            index = len(items) - 1 - items[::-1].index(element)
+            self._set_selection((kind, index))
+
+    # --- live preview: exact export frame --------------------------------------------------------
+
+    def _schedule_exact_frame(self) -> None:
+        """Once the preview has been paused and unchanged for a moment,
+        renders the REAL export frame of this moment with ffmpeg and
+        swaps it in - the check that what you see is what export makes."""
+        if self._current_project is None or self._engine is None or self._engine.playing:
+            return
+        self._cancel_exact_frame()
+        self._live_preview_render_after_id = self.after(_EXACT_FRAME_DELAY_MS, self._run_live_preview_render)
+
+    def _cancel_exact_frame(self) -> None:
+        if self._live_preview_render_after_id is not None:
+            self.after_cancel(self._live_preview_render_after_id)
+            self._live_preview_render_after_id = None
+        self._preview_request_token += 1  # any render already running is now stale
+
+    def _run_live_preview_render(self) -> None:
+        self._live_preview_render_after_id = None
+        if self._current_project is None or self._engine is None or self._engine.playing:
+            return
+        timeline = self._timeline_panel.timeline
+        if not timeline.items or timeline.validate():
             return
         try:
-            export_format = mse.resolve_export_format(timeline.aspect_ratio, "720p")
+            export_format = mse.resolve_export_format(timeline.aspect_ratio, _PREVIEW_CANVAS_TIER)
         except MultiSourceExportError as e:
-            self._live_preview_panel.show_error(str(e))
+            self._preview_panel.show_error(str(e))
             return
 
         caption_filter = None
@@ -474,33 +1131,65 @@ class VideoEditorView(ctk.CTkFrame):
             timeline, export_format, caption_filter=caption_filter,
         )
         if overlay_error is not None:
-            self._live_preview_panel.show_error(overlay_error)
+            self._preview_panel.show_error(overlay_error)
             return
 
-        timestamp = self._live_preview_panel.current_timestamp_seconds()
-        self._live_preview_panel.set_rendering_state(rendering=True)
+        timestamp = self._engine.position
+        media_items = dict(self._media_items)
+        cwd = self._current_project.exports_dir
         self._preview_request_token += 1
         token = self._preview_request_token
         run_generation_in_background(
             lambda: render_preview_frame(
-                timeline, self._media_items, export_format=export_format, timestamp_seconds=timestamp,
+                timeline, media_items, export_format=export_format, timestamp_seconds=timestamp,
                 filters=PreviewFilters(
                     caption_filter=caption_filter, text_overlay_filter=text_overlay_filter,
                     sticker_filters=sticker_filters or None,
                 ),
-                cwd=self._current_project.exports_dir,
+                cwd=cwd,
             ),
             self._result_queue, source=("live_preview", token),
         )
 
     def _handle_live_preview_result(self, token: int, result: GenerationTaskResult) -> None:
-        self._live_preview_panel.set_rendering_state(rendering=False)
-        if token != self._preview_request_token:
-            return  # a newer render already superseded this one - never show a stale frame out of order
         if result.error:
-            self._live_preview_panel.show_error(result.error)
+            if token == self._preview_request_token:
+                self._preview_panel.show_error(result.error)
             return
-        self._live_preview_panel.show_frame(result.value)
+        if token != self._preview_request_token or (self._engine is not None and self._engine.playing):
+            result.value.unlink(missing_ok=True)  # stale: the scene or position changed while it rendered
+            return
+        self._preview_panel.show_exact(result.value)
+        if self._last_exact_frame_path is not None and self._last_exact_frame_path != result.value:
+            self._last_exact_frame_path.unlink(missing_ok=True)
+        self._last_exact_frame_path = result.value
+
+    # --- saving overlays --------------------------------------------------------------------------
+
+    def _schedule_overlay_save(self) -> None:
+        """Autosave for everything on top of the timeline (the timeline
+        itself is already saved on every edit by _on_timeline_changed())."""
+        if self._current_project is None:
+            return
+        if self._overlay_save_after_id is not None:
+            self.after_cancel(self._overlay_save_after_id)
+        self._overlay_save_after_id = self.after(_OVERLAY_SAVE_DELAY_MS, self._save_overlays_now)
+        self._save_label.configure(text="💾 Saugoma...")
+
+    def _save_overlays_now(self) -> None:
+        self._overlay_save_after_id = None
+        if self._current_project is None:
+            return
+        storage.save_overlays(self._current_project.project_id, storage.ProjectOverlays(
+            text_overlays=tuple(self._text_overlays), stickers=tuple(self._stickers),
+            caption_style=self._caption_style,
+            caption_lines=tuple(self._caption_lines) if self._caption_lines is not None else None,
+            music_track=self._music_track,
+        ))
+        self._mark_saved()
+
+    def _mark_saved(self) -> None:
+        self._save_label.configure(text=f"💾 Išsaugota {time.strftime('%H:%M:%S')}")
 
     def _get_thumbnail(self, media: MediaItem) -> Path | None:
         """Returns a REAL, cached thumbnail path for `media` - extracted
@@ -594,10 +1283,11 @@ class VideoEditorView(ctk.CTkFrame):
             self._set_status("Add at least one clip or photo before applying a template.", kind="error")
             return
         new_timeline = apply_template(self._timeline_panel.timeline, template)
-        self._timeline_panel.apply_timeline(new_timeline)
-        self._captions_panel.apply_style(template.caption_style)
-        if template.sticker_presets:
-            self._stickers_panel.apply_presets(template.sticker_presets)
+        with self._history_batch(f"Šablonas „{template.name}“"):
+            self._timeline_panel.apply_timeline(new_timeline)
+            self._captions_panel.apply_style(template.caption_style)
+            if template.sticker_presets:
+                self._stickers_panel.apply_presets(template.sticker_presets)
         self._set_status(f"Applied template '{template.name}'.", kind="muted")
 
     # --- AI creative assistant (Stage 5 of the Reels-editor plan) ---------------------------
@@ -653,23 +1343,25 @@ class VideoEditorView(ctk.CTkFrame):
             self._set_status("Add at least one clip or photo before applying a suggestion.", kind="error")
             return
         new_timeline = apply_effect_to_every_item(self._timeline_panel.timeline, proposal.effect)
-        self._timeline_panel.apply_timeline(new_timeline)
-        self._captions_panel.apply_style(proposal.caption_style)
-        if proposal.stickers:
-            self._stickers_panel.apply_presets(tuple(s.to_preset() for s in proposal.stickers))
+        with self._history_batch("AI pasiūlymas"):
+            self._timeline_panel.apply_timeline(new_timeline)
+            self._captions_panel.apply_style(proposal.caption_style)
+            if proposal.stickers:
+                self._stickers_panel.apply_presets(tuple(s.to_preset() for s in proposal.stickers))
         self._set_status("Applied AI-suggested style.", kind="muted")
 
     # --- captions (Stage 4) ----------------------------------------------------------------
 
     def _on_caption_style_changed(self, style: CaptionStyle | None) -> None:
         self._caption_style = style
-        # A style change invalidates any already-edited lines (they
-        # were grouped/reviewed under the PREVIOUS style's own
-        # animation choice) - cleared so export falls back to the
-        # existing auto-transcribe-at-export-time path rather than
-        # silently reusing stale, possibly-mismatched edited lines.
-        self._caption_lines = None
-        self._refresh_multitrack_view()
+        # Edited/imported lines are kept: they're drawn as whole lines
+        # whatever the style (build_caption_filter_from_lines()), so
+        # changing a color or the font never throws the person's
+        # subtitle text away, and turning captions off and on again
+        # brings the same lines back.
+        self._record_history("Subtitrų stilius")
+        self._refresh_track_timeline()
+        self._on_scene_changed()
 
     def _on_generate_subtitles_requested(self, language: str) -> None:
         """"📝 Generate & Edit Subtitles" button - transcribes the
@@ -713,11 +1405,15 @@ class VideoEditorView(ctk.CTkFrame):
         lines = group_words_into_lines(result.value)
         self._captions_panel.set_lines(lines)
         self._caption_lines = lines
-        self._refresh_multitrack_view()
+        self._record_history("Sugeneruoti subtitrai")
+        self._refresh_track_timeline()
+        self._on_scene_changed()
 
     def _on_caption_lines_changed(self, lines: list[CaptionLine]) -> None:
         self._caption_lines = lines
-        self._refresh_multitrack_view()
+        self._record_history("Subtitrai")
+        self._refresh_track_timeline()
+        self._on_scene_changed()
 
     def _on_export_srt_requested(self, lines: list[CaptionLine]) -> None:
         """"💾 Export Subtitles as .SRT" button - requirement: "Leisk
@@ -742,14 +1438,26 @@ class VideoEditorView(ctk.CTkFrame):
     # --- text overlays -----------------------------------------------------------------------
 
     def _on_text_overlays_changed(self, overlays: list[TextOverlay]) -> None:
-        self._text_overlays = overlays
-        self._refresh_multitrack_view()
+        self._text_overlays = list(overlays)
+        self._drop_pending_panel_sync("text")
+        self._record_history("Tekstas")
+        self._refresh_track_timeline()
+        self._on_scene_changed()
+
+    def _drop_pending_panel_sync(self, kind: str) -> None:
+        # The panel itself just reported the authoritative list, so no
+        # preview edit of this kind is still waiting to be synced into it.
+        for key in [k for k in self._panel_sync_originals if k[0] == kind]:
+            del self._panel_sync_originals[key]
 
     # --- stickers ------------------------------------------------------------------------------
 
     def _on_stickers_changed(self, stickers: list[StickerInstance]) -> None:
-        self._stickers = stickers
-        self._refresh_multitrack_view()
+        self._stickers = list(stickers)
+        self._drop_pending_panel_sync("sticker")
+        self._record_history("Lipdukai")
+        self._refresh_track_timeline()
+        self._on_scene_changed()
 
     # --- music (Stage 4) -------------------------------------------------------------------
 
@@ -766,7 +1474,10 @@ class VideoEditorView(ctk.CTkFrame):
 
     def _on_music_track_changed(self, track: MusicTrack | None) -> None:
         self._music_track = track
-        self._refresh_multitrack_view()
+        self._record_history("Muzika")
+        self._refresh_track_timeline()
+        self._schedule_overlay_save()
+        self._request_preview_audio()
 
     def _on_analyze_rhythm_requested(self, track_path: Path) -> None:
         """"🎵 Analyze Rhythm" button - a real, possibly-slow audio
@@ -807,6 +1518,7 @@ class VideoEditorView(ctk.CTkFrame):
             self._set_status(str(e), kind="error")
             return
 
+        text_scale = text_scale_for(*_dimensions(mse.resolve_export_format(timeline.aspect_ratio, resolution_tier)))
         if self._caption_style is not None and self._caption_lines is not None:
             # The person already generated AND reviewed/edited the
             # subtitle lines via "📝 Generate & Edit Subtitles" (see
@@ -816,7 +1528,9 @@ class VideoEditorView(ctk.CTkFrame):
             # would silently discard whatever text/timing edits the
             # person just made).
             try:
-                caption_filter = build_caption_filter_from_lines(self._caption_lines, self._caption_style)
+                caption_filter = build_caption_filter_from_lines(
+                    self._caption_lines, self._caption_style, scale=text_scale,
+                )
             except CaptionError as e:
                 self._set_status(f"Couldn't build captions: {e}", kind="error")
                 return
@@ -879,7 +1593,10 @@ class VideoEditorView(ctk.CTkFrame):
         words = result.value
         timeline = self._timeline_panel.timeline
         try:
-            caption_filter = build_caption_filter(words, self._caption_style or CaptionStyle())
+            export_format = mse.resolve_export_format(timeline.aspect_ratio, self._pending_export_resolution_tier)
+            caption_filter = build_caption_filter(
+                words, self._caption_style or CaptionStyle(), scale=text_scale_for(*_dimensions(export_format)),
+            )
         except Exception as e:  # pragma: no cover - build_caption_filter() itself never raises for valid input
             self._export_panel.set_exporting_state(exporting=False)
             self._set_status(f"Couldn't build captions: {e}", kind="error")
@@ -906,6 +1623,7 @@ class VideoEditorView(ctk.CTkFrame):
         Returns `error_message` (not None) if building a filter failed
         (an invalid overlay/sticker) - the caller is responsible for
         surfacing it and stopping; this method never raises."""
+        text_scale = text_scale_for(export_format.width, export_format.height)
         text_overlay_filter = None
         if self._text_overlays:
             # video_label must read from whichever label the PREVIOUS
@@ -918,12 +1636,35 @@ class VideoEditorView(ctk.CTkFrame):
             overlay_video_label = "capv" if caption_filter is not None else "outv"
             try:
                 text_overlay_filter = build_text_overlay_filter(
-                    self._text_overlays, video_label=overlay_video_label,
+                    self._text_overlays, video_label=overlay_video_label, scale=text_scale,
                 )
             except TextOverlayError as e:
                 return None, [], f"Text overlay couldn't be added: {e}"
 
         sticker_filters: list[tuple[list[str], str]] = []
+        if text_overlay_filter is not None:
+            current_video_label = "textv"
+        elif caption_filter is not None:
+            current_video_label = "capv"
+        else:
+            current_video_label = "outv"
+        distinct_input_count = len({item.media_item_id for item in timeline.items})
+
+        # Rotated text: drawtext can't rotate, so each rotated overlay
+        # is a Pillow-rendered image composited like a sticker, right
+        # after the drawtext stage and BELOW every sticker - the same
+        # stacking order the live preview draws.
+        if any(overlay.is_rotated for overlay in self._text_overlays):
+            try:
+                rotated_filters, current_video_label = build_rotated_text_filters(
+                    self._text_overlays, canvas_width=export_format.width, canvas_height=export_format.height,
+                    cwd=self._current_project.exports_dir, video_label=current_video_label,
+                    first_input_index=distinct_input_count, scale=text_scale,
+                )
+            except TextOverlayError as e:
+                return None, [], f"Text overlay couldn't be added: {e}"
+            sticker_filters.extend(rotated_filters)
+
         if self._stickers:
             # Each sticker's own filter clause reads from whichever
             # video label the PREVIOUS stage produced - the raw
@@ -957,16 +1698,10 @@ class VideoEditorView(ctk.CTkFrame):
             # stage order (text_overlay_filter, THEN caption_filter,
             # THEN the raw timeline) - never the two stages' own
             # presence in isolation.
-            if text_overlay_filter is not None:
-                current_video_label = "textv"
-            elif caption_filter is not None:
-                current_video_label = "capv"
-            else:
-                current_video_label = "outv"
-            distinct_input_count = len({item.media_item_id for item in timeline.items})
+            first_sticker_input = distinct_input_count + len(sticker_filters)
             try:
                 for n, sticker in enumerate(self._stickers):
-                    input_index = distinct_input_count + n
+                    input_index = first_sticker_input + n
                     output_label = f"stickv{n}"
                     extra_args, clause = build_sticker_filter(
                         sticker, canvas_width=export_format.width, canvas_height=export_format.height,
@@ -1070,6 +1805,158 @@ class VideoEditorView(ctk.CTkFrame):
                 db.set_status(self._current_project.project_id, "exported")
             self._render_recent_projects()
 
+    # --- editor state, undo/redo -------------------------------------------------------------
+
+    def _editor_state(self) -> EditorState:
+        return EditorState(
+            timeline=self._timeline_panel.timeline,
+            text_overlays=tuple(self._text_overlays),
+            stickers=tuple(self._stickers),
+            caption_style=self._caption_style,
+            caption_lines=tuple(self._caption_lines) if self._caption_lines is not None else None,
+            music_track=self._music_track,
+        )
+
+    def _record_history(self, label: str, *, coalesce_key: str | None = None) -> None:
+        """Called after every edit: makes it one Undo step (quick
+        repeats of the same edit - typing, a slider - merge into one)."""
+        if self._applying_state or self._history_batch_depth or self._current_project is None:
+            return
+        self._history.record(self._editor_state(), label=label, coalesce_key=coalesce_key)
+        self._update_history_controls()
+
+    @contextlib.contextmanager
+    def _history_batch(self, label: str):
+        """Several panel changes that form ONE action (applying a
+        template) become a single Undo step."""
+        self._history_batch_depth += 1
+        try:
+            yield
+        finally:
+            self._history_batch_depth -= 1
+        self._record_history(label)
+
+    def _update_history_controls(self) -> None:
+        can_undo, can_redo = self._history.can_undo(), self._history.can_redo()
+        self._undo_button.configure(state="normal" if can_undo else "disabled")
+        self._redo_button.configure(state="normal" if can_redo else "disabled")
+        self._timeline_panel.set_history_state(can_undo=can_undo, can_redo=can_redo)
+
+    def _on_undo(self) -> None:
+        label = self._history.undo_label
+        state = self._history.undo()
+        if state is not None:
+            self._apply_editor_state(state, record=False)
+            self._set_status(f"Atšaukta: {label}" if label else "Atšaukta", kind="muted")
+
+    def _on_redo(self) -> None:
+        label = self._history.redo_label
+        state = self._history.redo()
+        if state is not None:
+            self._apply_editor_state(state, record=False)
+            self._set_status(f"Grąžinta: {label}" if label else "Grąžinta", kind="muted")
+
+    def _apply_editor_state(
+        self, state: EditorState, *, record: bool = True, label: str = "", coalesce_key: str | None = None,
+    ) -> None:
+        """Puts `state` on screen everywhere (every panel, the preview,
+        the track timeline) and saves it - used by undo/redo and by
+        edits made on the track timeline or in the settings panel."""
+        if self._current_project is None:
+            return
+        previous = self._editor_state()
+        timeline_changed = state.timeline != previous.timeline
+        music_changed = state.music_track != previous.music_track
+        self._applying_state = True
+        try:
+            if timeline_changed:
+                self._timeline_panel.show_timeline(state.timeline)
+            if state.text_overlays != previous.text_overlays:
+                self._text_overlays = list(state.text_overlays)
+                self._text_overlay_panel.set_overlays(self._text_overlays)
+            if state.stickers != previous.stickers:
+                self._stickers = list(state.stickers)
+                self._stickers_panel.set_stickers(self._stickers)
+            if (state.caption_style, state.caption_lines) != (previous.caption_style, previous.caption_lines):
+                self._captions_panel.reset()
+                if state.caption_style is not None:
+                    self._captions_panel.apply_style(state.caption_style)
+                if state.caption_lines is not None:
+                    self._captions_panel.set_lines(list(state.caption_lines))
+            if music_changed:
+                track = state.music_track
+                if track is not None and track.source_path.is_file():
+                    self._music_panel.set_imported_track(track.source_path, duration_seconds=None, track=track)
+                else:
+                    self._music_panel.clear_track()
+            self._text_overlays = list(state.text_overlays)
+            self._stickers = list(state.stickers)
+            self._caption_style = state.caption_style
+            self._caption_lines = list(state.caption_lines) if state.caption_lines is not None else None
+            self._music_track = state.music_track
+            self._panel_sync_originals.clear()
+        finally:
+            self._applying_state = False
+
+        if record:
+            self._history.record(self._editor_state(), label=label, coalesce_key=coalesce_key)
+        self._update_history_controls()
+        if timeline_changed:
+            storage.save_project(self._current_project.project_id, state.timeline, self._media_items)
+            self._mark_saved()
+            self._on_timeline_for_preview_changed()
+        elif music_changed:
+            self._request_preview_audio()
+        self._refresh_track_timeline()
+        self._on_scene_changed()
+
+    def _on_track_state_edited(self, state: EditorState, final: bool, label: str, coalesce_key: str | None) -> None:
+        """An edit made on the track timeline. While a text/sticker/
+        caption bar is being dragged only the preview and the tracks
+        follow it; the finished edit is applied and saved once."""
+        if self._current_project is None:
+            return
+        if final:
+            self._apply_editor_state(state, label=label, coalesce_key=coalesce_key)
+            return
+        lines = state.caption_lines if state.caption_style is not None and state.caption_lines else None
+        self._cancel_exact_frame()
+        self._preview_panel.update_scene(pc.Scene(
+            text_overlays=state.text_overlays, stickers=state.stickers,
+            caption_style=state.caption_style, caption_lines=lines,
+        ))
+        self._track_timeline.render(state, self._media_items)
+
+    def _bind_shortcuts(self) -> None:
+        """Ctrl+Z undo; Ctrl+Y / Ctrl+Shift+Z redo; Space play/pause -
+        while this view is on screen and the cursor isn't in a text field."""
+        toplevel = self.winfo_toplevel()
+
+        def guarded(action: Callable[[], None]):
+            def handler(event):
+                try:
+                    if not self.winfo_exists() or not self.winfo_ismapped():
+                        return None
+                    if isinstance(self.focus_get(), (tk.Entry, tk.Text, tk.Button, tk.Spinbox)):
+                        return None
+                except (tk.TclError, KeyError):
+                    return None
+                action()
+                return "break"
+            return handler
+
+        undo = guarded(self._on_undo)
+        redo = guarded(self._on_redo)
+
+        def upper_z(event):
+            return redo(event) if event.state & 0x1 else undo(event)  # Shift held, or Caps Lock
+
+        toplevel.bind("<Control-z>", undo, add="+")
+        toplevel.bind("<Control-Z>", upper_z, add="+")
+        toplevel.bind("<Control-y>", redo, add="+")
+        toplevel.bind("<Control-Y>", redo, add="+")
+        toplevel.bind("<space>", guarded(self._on_play_toggled), add="+")
+
     # --- recent projects -------------------------------------------------------------------
 
     def _render_recent_projects(self) -> None:
@@ -1107,10 +1994,15 @@ class VideoEditorView(ctk.CTkFrame):
         for child in self._status_container.winfo_children():
             child.destroy()
         status_label(self._status_container, message, kind=kind).pack(anchor="w")
+        if not self._status_container.winfo_manager() and hasattr(self, "_vertical_panes"):
+            self._status_container.pack(fill="x", padx=theme.SPACE_MD, pady=(0, theme.SPACE_XS),
+                                        before=self._vertical_panes)
 
     def _clear_status(self) -> None:
         for child in self._status_container.winfo_children():
             child.destroy()
+        if hasattr(self, "_vertical_panes"):
+            self._status_container.pack_forget()
 
     # --- queue polling -------------------------------------------------------------------
 
@@ -1144,6 +2036,16 @@ class VideoEditorView(ctk.CTkFrame):
             and len(result.source) == 2 and result.source[0] == "live_preview"
         ):
             self._handle_live_preview_result(result.source[1], result)
+        elif (
+            isinstance(result, GenerationTaskResult) and isinstance(result.source, tuple)
+            and len(result.source) == 3 and result.source[0] == "base_frame"
+        ):
+            self._handle_base_frame_result(result.source[1], result.source[2], result)
+        elif (
+            isinstance(result, GenerationTaskResult) and isinstance(result.source, tuple)
+            and len(result.source) == 2 and result.source[0] == "preview_audio"
+        ):
+            self._handle_preview_audio_result(result.source[1], result)
         elif isinstance(result, ProgressResult) and result.source == "export":
             self._handle_export_progress(result)
         elif isinstance(result, CancelableTaskResult) and result.source == "export":
@@ -1168,3 +2070,7 @@ def _import_files(project: VideoEditorProject, paths: list[Path]) -> tuple[list[
         except MediaImportError as e:
             errors.append(f"{path.name}: {e}")
     return items, errors
+
+
+def _dimensions(export_format: mse.ExportFormat) -> tuple[int, int]:
+    return export_format.width, export_format.height
