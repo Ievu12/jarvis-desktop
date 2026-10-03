@@ -31,6 +31,7 @@ NAV_ITEMS = (
     ("story_generator", "📖", "AI Storytelling Generator"),
     ("content_studio", "🗂️", "AI Content Studio"),
     ("video_editor", "🎛️", "Video Editor"),
+    ("carousel_studio", "🧩", "Karuselių kūrimas"),
     ("automations", "⚙️", "Automations"),
     ("settings", "🛠️", "Settings"),
 )

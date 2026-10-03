@@ -323,3 +323,17 @@ useful across every Video Editor project, not scoped to one), so this
 lives as its own standalone file rather than a row in
 VIDEO_EDITOR_DB_FILE's own per-project table. Contains no credential;
 created idempotently with an empty default shape on first use."""
+
+CAROUSEL_STUDIO_DB_FILE: Path = JARVIS_DATA_DIR / ".jarvis" / "carousel_studio.db"
+"""SQLite index for the Instagram carousel studio (jarvis.carousel_studio):
+one row per carousel project (name, format, slide count, timestamps) so
+the project library lists quickly. The project itself lives as
+project.json in CAROUSEL_STUDIO_PROJECTS_DIR. Contains no credential."""
+
+CAROUSEL_STUDIO_PROJECTS_DIR: Path = JARVIS_DATA_DIR / ".jarvis" / "carousel_studio" / "projects"
+"""One subdirectory per carousel project: project.json, its imported
+images (assets/) and a cover thumbnail."""
+
+CAROUSEL_STUDIO_LIBRARY_DIR: Path = JARVIS_DATA_DIR / ".jarvis" / "carousel_studio" / "library"
+"""Person-level reusable files for the carousel studio (uploaded
+photos/logos, saved templates, custom fonts), shared by every project."""
