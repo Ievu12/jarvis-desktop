@@ -248,6 +248,8 @@ class ProjectOverlays:
     caption_style: object | None = None
     caption_lines: tuple | None = None
     music_track: object | None = None
+    reels: object | None = None
+    """jarvis.video_editor.reels.ReelsLayers (Reels mode)."""
 
 
 def save_overlays(project_id: str, overlays: ProjectOverlays) -> None:
@@ -256,6 +258,7 @@ def save_overlays(project_id: str, overlays: ProjectOverlays) -> None:
     import dataclasses
 
     from jarvis.video_editor import db
+    from jarvis.video_editor import reels as reels_module
 
     def sticker_dict(sticker) -> dict:
         data = dataclasses.asdict(sticker)
@@ -276,6 +279,7 @@ def save_overlays(project_id: str, overlays: ProjectOverlays) -> None:
             if overlays.caption_lines is not None else None
         ),
         "music_track": music_data,
+        "reels": reels_module.to_dict(overlays.reels) if overlays.reels is not None else None,
     })
 
 
@@ -286,6 +290,7 @@ def load_overlays(project_id: str) -> ProjectOverlays:
     from pathlib import Path as _Path
 
     from jarvis.video_editor import db
+    from jarvis.video_editor import reels as reels_module
     from jarvis.video_editor.audio_mixing import MusicTrack
     from jarvis.video_editor.captions import CaptionLine, CaptionStyle
     from jarvis.video_editor.stickers import StickerInstance
@@ -320,4 +325,5 @@ def load_overlays(project_id: str) -> ProjectOverlays:
             _dataclass_from_dict(MusicTrack, music_data, source_path=_Path(music_data["source_path"]))
             if music_data else None
         ),
+        reels=reels_module.from_dict(data.get("reels")),
     )

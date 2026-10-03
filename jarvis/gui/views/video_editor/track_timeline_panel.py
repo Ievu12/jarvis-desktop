@@ -38,11 +38,12 @@ _TRACK_COLORS = {
     "sound": "#1f7a8c",
     "audio": "#2d8a5f",
     "captions": "#b38600",
+    "reels_captions": "#e0457b",
     "text": "#8a4fb3",
     "stickers": "#d1538a",
 }
 _PLAYHEAD_COLOR = "#ff4d4d"
-_LIVE_TRACKS = ("text", "stickers", "captions")
+_LIVE_TRACKS = ("text", "stickers", "captions", "reels_captions")
 # Dragging these updates the preview on every mouse move (cheap: just
 # a redraw). Video and audio edits restart decoding, so those show a
 # ghost bar while dragging and apply once on release.

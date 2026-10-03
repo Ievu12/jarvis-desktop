@@ -44,6 +44,7 @@ from jarvis.gui.views.video_editor.interactive_preview_panel import InteractiveP
 from jarvis.gui.views.video_editor.looks_panel import FiltersPanel, TransitionsPanel
 from jarvis.gui.views.video_editor.music_panel import MusicPanel
 from jarvis.gui.views.video_editor.reel_templates_panel import ReelTemplatesPanel
+from jarvis.gui.views.video_editor.reels_panel import ReelsPanel
 from jarvis.gui.views.video_editor.stickers_panel import StickersPanel
 from jarvis.gui.views.video_editor.speech_sync_panel import SpeechSyncPanel
 from jarvis.gui.views.video_editor.text_overlay_panel import TextOverlayPanel
@@ -59,7 +60,8 @@ from jarvis.gui.worker import (
 )
 from jarvis.video_editor import db, media_import, multisource_export as mse, playback, storage
 from jarvis.video_editor import preview_compositor as pc
-from jarvis.video_editor import track_layout
+from jarvis.video_editor import reels, reels_export, track_layout
+from jarvis.video_editor.reels_keywords import suggest_keywords
 from jarvis.video_editor.audio_mixing import AudioMixingError, MusicTrack, build_music_mix_filter
 from jarvis.video_editor.captions import (
     CaptionError,
@@ -111,6 +113,7 @@ _TRACKS_HEIGHT = 280
 
 _CATEGORIES: tuple[tuple[str, str], ...] = (
     ("clips", "🎬 Klipai"),
+    ("reels", "📱 Reels"),
     ("animations", "✨ Animacijos"),
     ("stickers", "🎉 Lipdukai"),
     ("transitions", "🔀 Perėjimai"),
@@ -148,6 +151,7 @@ _CATEGORIES: tuple[tuple[str, str], ...] = (
 # edit) is ever lost by changing category.
 _CATEGORY_PANEL_ATTRS: dict[str, tuple[str, ...]] = {
     "clips": ("_import_panel", "_timeline_panel"),
+    "reels": ("_reels_panel",),
     "animations": ("_timeline_panel",),
     "stickers": ("_stickers_panel",),
     "transitions": ("_transitions_panel", "_timeline_panel"),
@@ -176,6 +180,7 @@ class VideoEditorView(ctk.CTkFrame):
         self._music_track: MusicTrack | None = None
         self._text_overlays: list[TextOverlay] = []
         self._stickers: list[StickerInstance] = []
+        self._reels: reels.ReelsLayers | None = None
         self._pending_export_resolution_tier: str = "1080p"
         self._live_preview_render_after_id: str | None = None
         self._preview_request_token: int = 0
@@ -307,6 +312,12 @@ class VideoEditorView(ctk.CTkFrame):
 
         self._text_overlay_panel = TextOverlayPanel(self._scroll, on_overlays_changed=self._on_text_overlays_changed)
 
+        self._reels_panel = ReelsPanel(
+            self._scroll, on_captions_changed=self._on_reels_captions_changed,
+            on_transcribe_requested=self._on_reels_transcribe_requested, on_seek=self._on_preview_seek,
+            get_duration=lambda: self._engine.duration if self._engine is not None else 0.0,
+        )
+
         self._speech_sync_panel = SpeechSyncPanel(self._scroll, get_words=lambda: self._last_transcribed_words)
 
         self._stickers_panel = StickersPanel(
@@ -353,7 +364,7 @@ class VideoEditorView(ctk.CTkFrame):
 
         all_panels = (
             self._import_panel, self._filters_panel, self._transitions_panel, self._timeline_panel, self._captions_panel,
-            self._text_overlay_panel, self._speech_sync_panel, self._stickers_panel, self._music_panel,
+            self._text_overlay_panel, self._reels_panel, self._speech_sync_panel, self._stickers_panel, self._music_panel,
             self._reel_templates_panel, self._ai_assistant_panel, self._export_panel,
         )
         for panel in all_panels:
@@ -403,6 +414,10 @@ class VideoEditorView(ctk.CTkFrame):
         ctk.CTkButton(inner, text="➕ Naujas projektas", command=self._on_new_project_clicked, width=150).pack(
             side="left",
         )
+        ctk.CTkButton(
+            inner, text="📱 Naujas Reels", command=self._on_new_reels_project_clicked, width=130,
+            fg_color="#E0457B", hover_color="#F06090",
+        ).pack(side="left", padx=(theme.SPACE_XS, 0))
         self._project_name_label = ctk.CTkLabel(
             inner, text="Projektas neatidarytas",
             font=ctk.CTkFont(family=theme.FONT_FAMILY_BODY, size=theme.FONT_SIZE_SMALL),
@@ -434,6 +449,19 @@ class VideoEditorView(ctk.CTkFrame):
         project = storage.create_project()
         db.create_project_record(project.project_id, f"Project {project.project_id[:8]}")
         self._open_project(project.project_id)
+
+    def _on_new_reels_project_clicked(self) -> None:
+        """A project in Reels mode: a 9:16 (1080 x 1920) timeline with the
+        Reels layers switched on and the Reels tools open."""
+        project = storage.create_project()
+        db.create_project_record(project.project_id, f"Reels {project.project_id[:8]}")
+        storage.save_project(project.project_id, Timeline(aspect_ratio=reels.REELS_ASPECT_RATIO), {})
+        storage.save_overlays(project.project_id, storage.ProjectOverlays(
+            reels=reels.ReelsLayers(captions=reels.ReelsCaptions()),
+        ))
+        self._open_project(project.project_id)
+        self._on_category_selected("reels")
+        self._set_status("Reels projektas 1080 × 1920 sukurtas. Įkelkite vaizdo įrašą skiltyje „Klipai“.", kind="muted")
 
     def _open_project(self, project_id: str) -> None:
         record = db.get_project(project_id)
@@ -467,6 +495,8 @@ class VideoEditorView(ctk.CTkFrame):
         self._text_overlay_panel.set_overlays(self._text_overlays)
         self._stickers = list(overlays.stickers)
         self._stickers_panel.set_stickers(self._stickers)
+        self._reels = overlays.reels
+        self._reels_panel.set_captions(self._reels.captions if self._reels is not None else None)
         self._panel_sync_originals.clear()
 
         self._captions_panel.reset()
@@ -759,7 +789,7 @@ class VideoEditorView(ctk.CTkFrame):
             lines = tuple(self._caption_lines)
         return pc.Scene(
             text_overlays=tuple(self._text_overlays), stickers=tuple(self._stickers),
-            caption_style=self._caption_style, caption_lines=lines,
+            caption_style=self._caption_style, caption_lines=lines, reels=self._reels,
         )
 
     def _on_scene_changed(self) -> None:
@@ -777,6 +807,13 @@ class VideoEditorView(ctk.CTkFrame):
         """Shows the selected element's settings (or none)."""
         self._refresh_look_panels()
         ref = self._selection
+        if ref is not None and ref[0] == "reels_caption":
+            if self._reels is not None and self._reels.captions is not None:
+                if self._inspector_panel.shown is not None:
+                    self._inspector_panel.show_nothing()
+                return  # its settings are in the Reels tools on the left
+            self._selection = None
+            ref = None
         if ref is not None:
             kind, index = ref
             if kind in ("text", "sticker"):
@@ -804,18 +841,20 @@ class VideoEditorView(ctk.CTkFrame):
         """One selection shared by the preview, the track timeline and
         the settings panel ("text"/"sticker"/"clip", index)."""
         self._selection = ref
-        if ref is None or ref[0] in ("text", "sticker"):
+        if ref is None or ref[0] in ("text", "sticker", "reels_caption"):
             self._preview_panel.select(ref)
         else:
             self._preview_panel.select(None)
         track_ref = None
-        if ref is not None:
+        if ref is not None and ref[0] != "reels_caption":
             track_ref = ({"text": "text", "sticker": "stickers", "clip": "video"}[ref[0]], ref[1])
         self._track_timeline.select(track_ref)
         self._sync_inspector_with_selection()
 
     def _on_preview_selection_changed(self, ref: tuple[str, int] | None) -> None:
         self._set_selection(ref)
+        if ref is not None and ref[0] == "reels_caption":
+            self._on_category_selected("reels")
 
     def _on_track_selection_changed(self, ref: tuple[str, int] | None) -> None:
         """A bar was clicked on the track timeline."""
@@ -837,7 +876,7 @@ class VideoEditorView(ctk.CTkFrame):
         else:
             self._set_selection(None)
             self._track_timeline.select(ref)
-            self._on_category_selected("music" if track == "audio" else "text")
+            self._on_category_selected({"audio": "music", "reels_captions": "reels"}.get(track, "text"))
 
     # --- filters and transitions (library panels) -------------------------------------------
 
@@ -940,6 +979,9 @@ class VideoEditorView(ctk.CTkFrame):
         if kind == "clip":
             self._on_clip_edited(index, new_element, final)
             return
+        if kind == "reels_caption":
+            self._on_reels_caption_dragged(new_element, final)
+            return
         items = self._items_for(kind)
         if not (0 <= index < len(items)):
             return
@@ -991,6 +1033,8 @@ class VideoEditorView(ctk.CTkFrame):
         )
 
     def _on_element_delete_requested(self, kind: str, index: int) -> None:
+        if kind == "reels_caption":
+            return  # phrases are deleted in the Reels tools or on the timeline, never all at once by a key
         if kind == "clip":
             self._set_selection(None)
             self._apply_editor_state(
@@ -1139,14 +1183,18 @@ class VideoEditorView(ctk.CTkFrame):
         cwd = self._current_project.exports_dir
         self._preview_request_token += 1
         token = self._preview_request_token
+        reels_layers = self._reels
         run_generation_in_background(
-            lambda: render_preview_frame(
-                timeline, media_items, export_format=export_format, timestamp_seconds=timestamp,
-                filters=PreviewFilters(
-                    caption_filter=caption_filter, text_overlay_filter=text_overlay_filter,
-                    sticker_filters=sticker_filters or None,
+            lambda: reels_export.compose_onto_frame(
+                render_preview_frame(
+                    timeline, media_items, export_format=export_format, timestamp_seconds=timestamp,
+                    filters=PreviewFilters(
+                        caption_filter=caption_filter, text_overlay_filter=text_overlay_filter,
+                        sticker_filters=sticker_filters or None,
+                    ),
+                    cwd=cwd,
                 ),
-                cwd=cwd,
+                reels_layers, t=timestamp,
             ),
             self._result_queue, source=("live_preview", token),
         )
@@ -1184,7 +1232,7 @@ class VideoEditorView(ctk.CTkFrame):
             text_overlays=tuple(self._text_overlays), stickers=tuple(self._stickers),
             caption_style=self._caption_style,
             caption_lines=tuple(self._caption_lines) if self._caption_lines is not None else None,
-            music_track=self._music_track,
+            music_track=self._music_track, reels=self._reels,
         ))
         self._mark_saved()
 
@@ -1734,6 +1782,26 @@ class VideoEditorView(ctk.CTkFrame):
             self._set_status(overlay_error, kind="error")
             return
 
+        # The Reels layers go on top of everything as one transparent
+        # overlay video, rendered right before the export by the same
+        # code that draws them in the preview.
+        reels_layers = self._reels if self._reels is not None and not self._reels.is_empty else None
+        reels_overlay_path = None
+        if reels_layers is not None:
+            if sticker_filters:
+                previous_label = mse.extract_output_label(sticker_filters[-1][1])
+            elif text_overlay_filter is not None:
+                previous_label = mse.extract_output_label(text_overlay_filter)
+            elif caption_filter is not None:
+                previous_label = mse.extract_output_label(caption_filter)
+            else:
+                previous_label = "outv"
+            reels_overlay_path = self._current_project.exports_dir / f"_reels_{uuid.uuid4().hex[:10]}.mov"
+            sticker_filters = list(sticker_filters) + [reels_export.build_overlay_filter(
+                reels_overlay_path.name, video_label=previous_label,
+                input_index=len({item.media_item_id for item in timeline.items}) + len(sticker_filters),
+            )]
+
         audio_mix_filter = None
         if self._music_track is not None:
             try:
@@ -1778,8 +1846,13 @@ class VideoEditorView(ctk.CTkFrame):
         self._cancel_event = threading.Event()
         self._export_panel.set_exporting_state(exporting=True)
         db.save_export_format_last_used(self._current_project.project_id, export_format.label)
+        export_function = mse.export_timeline
+        reels_kwargs: dict = {}
+        if reels_layers is not None:
+            export_function = reels_export.export_timeline_with_reels
+            reels_kwargs = {"reels_layers": reels_layers, "overlay_path": reels_overlay_path}
         run_cancelable_in_background(
-            mse.export_timeline, self._result_queue, cancel_event=self._cancel_event, source="export",
+            export_function, self._result_queue, cancel_event=self._cancel_event, source="export", **reels_kwargs,
             timeline=timeline, media_items=self._media_items, export_format=export_format, output_path=output_path,
             caption_filter=caption_filter, audio_mix_filter=audio_mix_filter, text_overlay_filter=text_overlay_filter,
             sticker_filters=sticker_filters or None,
@@ -1805,6 +1878,74 @@ class VideoEditorView(ctk.CTkFrame):
                 db.set_status(self._current_project.project_id, "exported")
             self._render_recent_projects()
 
+    # --- Reels mode -------------------------------------------------------------------------------
+
+    def _on_reels_captions_changed(
+        self, captions: reels.ReelsCaptions | None, label: str, coalesce_key: str | None,
+    ) -> None:
+        """A change made in the Reels tools."""
+        if self._current_project is None:
+            self._reels_panel.show_message("Pirmiausia sukurkite arba atidarykite projektą.", kind="error")
+            return
+        layers = dataclasses.replace(self._reels or reels.ReelsLayers(), captions=captions)
+        self._apply_editor_state(
+            dataclasses.replace(self._editor_state(), reels=layers), label=label, coalesce_key=coalesce_key,
+        )
+
+    def _on_reels_caption_dragged(self, captions: reels.ReelsCaptions, final: bool) -> None:
+        """The subtitles were dragged (moved or resized) in the preview."""
+        if self._reels is None or captions.style.validate():
+            return
+        layers = dataclasses.replace(self._reels, captions=captions)
+        if not final:
+            self._reels = layers
+            self._cancel_exact_frame()
+            self._preview_panel.update_scene(self._current_scene())
+            return
+        self._apply_editor_state(
+            dataclasses.replace(self._editor_state(), reels=layers), label="Subtitrų vieta",
+            coalesce_key="reels_caption_drag",
+        )
+
+    def _on_reels_transcribe_requested(self, language: str) -> None:
+        """Recognizes the speech of the whole timeline (every clip's own
+        sound, as heard in the export, without the music) word by word."""
+        if self._current_project is None:
+            self._reels_panel.show_message("Pirmiausia sukurkite arba atidarykite projektą.", kind="error")
+            return
+        timeline = self._timeline_panel.timeline
+        if not any(isinstance(item, TimelineClip) for item in timeline.items) or timeline.validate():
+            self._reels_panel.show_message("Pridėkite vaizdo įrašą su kalba į laiko juostą.", kind="error")
+            return
+        media_items = dict(self._media_items)
+        cwd = self._current_project.exports_dir
+        speech_path = cwd / "_reels_speech.wav"
+
+        def transcribe():
+            playback.render_preview_audio(timeline, media_items, output_path=speech_path, cwd=cwd)
+            try:
+                return generate_word_timings(speech_path, language=language)
+            finally:
+                speech_path.unlink(missing_ok=True)
+
+        self._reels_panel.set_busy(True, "🎙 Atpažįstama kalba... (gali užtrukti minutę ar dvi)")
+        run_generation_in_background(transcribe, self._result_queue, source="reels_transcription")
+
+    def _handle_reels_transcription_result(self, result: GenerationTaskResult) -> None:
+        if result.error:
+            self._reels_panel.set_busy(False, f"Nepavyko atpažinti kalbos: {result.error}", kind="error")
+            return
+        words = reels.words_from_timings(result.value)
+        keywords = suggest_keywords(words, own_words=self._reels_panel.keywords())
+        words = reels.emphasize_matching(words, keywords)
+        previous = self._reels.captions if self._reels is not None and self._reels.captions is not None else None
+        captions = dataclasses.replace(previous or reels.ReelsCaptions(), words=words, visible=True)
+        self._on_reels_captions_changed(captions, "Subtitrai iš kalbos", None)
+        message = f"Atpažinta {len(words)} žodžių."
+        if keywords:
+            message += f" Paryškinta: {', '.join(keywords)}."
+        self._reels_panel.set_busy(False, message, kind="success")
+
     # --- editor state, undo/redo -------------------------------------------------------------
 
     def _editor_state(self) -> EditorState:
@@ -1815,6 +1956,7 @@ class VideoEditorView(ctk.CTkFrame):
             caption_style=self._caption_style,
             caption_lines=tuple(self._caption_lines) if self._caption_lines is not None else None,
             music_track=self._music_track,
+            reels=self._reels,
         )
 
     def _record_history(self, label: str, *, coalesce_key: str | None = None) -> None:
@@ -1894,6 +2036,9 @@ class VideoEditorView(ctk.CTkFrame):
             self._caption_style = state.caption_style
             self._caption_lines = list(state.caption_lines) if state.caption_lines is not None else None
             self._music_track = state.music_track
+            if state.reels != previous.reels:
+                self._reels_panel.set_captions(state.reels.captions if state.reels is not None else None)
+            self._reels = state.reels
             self._panel_sync_originals.clear()
         finally:
             self._applying_state = False
@@ -1923,7 +2068,7 @@ class VideoEditorView(ctk.CTkFrame):
         self._cancel_exact_frame()
         self._preview_panel.update_scene(pc.Scene(
             text_overlays=state.text_overlays, stickers=state.stickers,
-            caption_style=state.caption_style, caption_lines=lines,
+            caption_style=state.caption_style, caption_lines=lines, reels=state.reels,
         ))
         self._track_timeline.render(state, self._media_items)
 
@@ -2024,6 +2169,8 @@ class VideoEditorView(ctk.CTkFrame):
             self._handle_subtitle_generation_result(result)
         elif isinstance(result, GenerationTaskResult) and result.source == "rhythm_analysis":
             self._handle_rhythm_analysis_result(result)
+        elif isinstance(result, GenerationTaskResult) and result.source == "reels_transcription":
+            self._handle_reels_transcription_result(result)
         elif isinstance(result, GenerationTaskResult) and result.source == "ai_proposal":
             self._handle_ai_proposal_result(result)
         elif (

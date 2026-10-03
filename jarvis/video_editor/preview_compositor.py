@@ -30,9 +30,11 @@ from typing import Literal
 
 from PIL import Image, ImageSequence
 
+from jarvis.video_editor import reels_render
 from jarvis.video_editor import text_overlay as text_overlay_module
 from jarvis.video_editor import text_render
 from jarvis.video_editor.captions import CaptionLine, CaptionStyle, caption_font_file
+from jarvis.video_editor.reels import ReelsLayers
 from jarvis.video_editor.stickers import (
     StickerInstance,
     blink_dim_factor,
@@ -43,7 +45,7 @@ from jarvis.video_editor.stickers import (
 )
 from jarvis.video_editor.text_overlay import TextOverlay
 
-ElementKind = Literal["text", "sticker"]
+ElementKind = Literal["text", "sticker", "reels_caption"]
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,9 @@ class Scene:
     stickers: tuple[StickerInstance, ...] = ()
     caption_style: CaptionStyle | None = None
     caption_lines: tuple[CaptionLine, ...] | None = None
+    reels: ReelsLayers | None = None
+    """Reels mode layers, drawn on top of everything else by
+    jarvis.video_editor.reels_render (the same code the export uses)."""
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,7 @@ class ElementBox:
 
     kind: ElementKind
     index: int
-    """Index into Scene.text_overlays / Scene.stickers."""
+    """Index into Scene.text_overlays / Scene.stickers (0 for the Reels subtitles)."""
     center_x: float
     center_y: float
     width: float
@@ -347,7 +352,7 @@ def compose(base: Image.Image, scene: Scene, *, t: float, canvas_width: int, can
     """Returns a new RGB image: `base` (one decoded frame at timeline
     time `t`) with every overlay of `scene` that is visible at `t`
     drawn on top, in the export's own stacking order - captions, then
-    plain text, then rotated text, then stickers."""
+    plain text, then rotated text, then stickers, then the Reels layers."""
     scale = base.width / canvas_width
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
 
@@ -363,6 +368,9 @@ def compose(base: Image.Image, scene: Scene, *, t: float, canvas_width: int, can
     for sticker in scene.stickers:
         if _visible(sticker.start_seconds, sticker.end_seconds, t):
             _draw_sticker_safe(layer, sticker, t=t, canvas_width=canvas_width, canvas_height=canvas_height, scale=scale)
+
+    if scene.reels is not None:
+        reels_render.draw(layer, scene.reels, t=t, scale=reels_render.scale_for(*base.size))
 
     result = base.convert("RGBA")
     result.alpha_composite(layer)
@@ -420,6 +428,16 @@ def element_boxes(scene: Scene, *, t: float, frame_width: int, frame_height: int
             kind="sticker", index=index, center_x=sticker.x_fraction * canvas_width * scale,
             center_y=sticker.y_fraction * canvas_height * scale, width=side, height=side,
             rotation_degrees=sticker.rotation_degrees,
+        ))
+
+    caption = reels_render.caption_box(
+        scene.reels, t=t, frame_width=frame_width, frame_height=frame_height,
+        scale=reels_render.scale_for(frame_width, frame_height),
+    )
+    if caption is not None:
+        boxes.append(ElementBox(
+            kind="reels_caption", index=0, center_x=caption.center_x, center_y=caption.center_y,
+            width=caption.width, height=caption.height, rotation_degrees=0.0,
         ))
     return boxes
 

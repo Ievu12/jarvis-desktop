@@ -35,6 +35,7 @@ from PIL import Image, ImageTk
 from jarvis.gui import theme
 from jarvis.gui.widgets import Card
 from jarvis.video_editor import preview_compositor as pc
+from jarvis.video_editor import reels
 from jarvis.video_editor.stickers import StickerInstance
 from jarvis.video_editor.text_overlay import ROTATABLE_TEXT_ANIMATIONS, TextOverlay
 
@@ -52,7 +53,8 @@ _MIN_STICKER_SIZE = 0.02
 _MIN_FONT_SIZE, _MAX_FONT_SIZE = 8, 400
 
 ElementRef = tuple[str, int]
-"""("text" | "sticker", index into the scene's list)."""
+"""("text" | "sticker", index into the scene's list), or ("reels_caption", 0)."""
+_MIN_REELS_FONT, _MAX_REELS_FONT = 30, 220
 
 
 def format_timecode(seconds: float) -> str:
@@ -352,6 +354,8 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         return box.center_x + math.sin(angle) * distance, box.center_y - math.cos(angle) * distance
 
     def _can_rotate(self, kind: str, index: int) -> bool:
+        if kind == "reels_caption":
+            return False
         if kind == "sticker":
             return self._scene.stickers[index].animation != "spin"
         return self._scene.text_overlays[index].animation in ROTATABLE_TEXT_ANIMATIONS
@@ -382,6 +386,8 @@ class InteractivePreviewPanel(ctk.CTkFrame):
 
     def _selection_exists(self, ref: ElementRef) -> bool:
         kind, index = ref
+        if kind == "reels_caption":
+            return self._scene.reels is not None and self._scene.reels.captions is not None
         items = self._scene.text_overlays if kind == "text" else self._scene.stickers
         return 0 <= index < len(items)
 
@@ -393,6 +399,8 @@ class InteractivePreviewPanel(ctk.CTkFrame):
             self._on_selection_changed(ref)
 
     def _element(self, kind: str, index: int):
+        if kind == "reels_caption":
+            return self._scene.reels.captions
         return (self._scene.text_overlays if kind == "text" else self._scene.stickers)[index]
 
     def _on_press(self, event) -> None:
@@ -458,6 +466,23 @@ class InteractivePreviewPanel(ctk.CTkFrame):
         width, height = self._display_size
         scale = width / self._canvas_size[0]
         mode = drag["mode"]
+
+        if isinstance(element, reels.ReelsCaptions):
+            # The subtitles stay centered across; moving changes their
+            # height on screen, the corner handle their font size.
+            style = element.style
+            if mode == "move":
+                center_y = box.center_y + (y - drag["start_y"])
+                style = dataclasses.replace(style, y_fraction=round(_clamp(center_y / height, 0.05, 0.95), 3))
+            elif mode == "resize":
+                start_distance = max(1.0, math.hypot(drag["start_x"] - box.center_x, drag["start_y"] - box.center_y))
+                ratio = math.hypot(x - box.center_x, y - box.center_y) / start_distance
+                style = dataclasses.replace(
+                    style, font_size=round(_clamp(style.font_size * ratio, _MIN_REELS_FONT, _MAX_REELS_FONT)),
+                )
+            else:
+                return None
+            return dataclasses.replace(element, style=style)
 
         if mode == "move":
             center_x = box.center_x + (x - drag["start_x"])
